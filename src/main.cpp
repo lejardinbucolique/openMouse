@@ -85,7 +85,9 @@ bool g_verbose = false;
 bool g_perfLog = false;
 struct PerfStats {
     uint64_t events = 0, flushes = 0;
-    int64_t  tRead = 0, tPin = 0, tOverlay = 0, tShell = 0, tTotal = 0, tMax = 0;
+    int64_t  tRead = 0, tPin = 0, tOverlay = 0, tShell = 0, tHit = 0, tClass = 0, tSettle = 0, tTotal = 0, tMax = 0;
+    // Largest single-event value of each step, reset with the rest every 2 s.
+    int64_t  mRead = 0, mPin = 0, mOverlay = 0, mShell = 0, mHit = 0, mClass = 0;
     DWORD    lagMax = 0;
     uint64_t lagSum = 0;
 } g_perf;
@@ -335,18 +337,16 @@ void UnpinCursor() {
 bool g_overShell = false;
 
 bool IsShellWindowAt(POINT p) {
+    int64_t t0 = Qpc();
     HWND h = WindowFromPoint(p);
+    g_perf.tHit += Qpc() - t0;
     if (!h) return false;
     HWND root = GetAncestor(h, GA_ROOT);
     wchar_t cls[64] = {};
+    t0 = Qpc();
     GetClassNameW(root ? root : h, cls, 63);
-    return !wcscmp(cls, L"Shell_TrayWnd") ||
-           !wcscmp(cls, L"Shell_SecondaryTrayWnd") ||
-           !wcscmp(cls, L"NotifyIconOverflowWindow") ||
-           !wcscmp(cls, L"Windows.UI.Core.CoreWindow") ||          // Start, search
-           !wcscmp(cls, L"XamlExplorerHostIslandWindow") ||        // Win11 taskbar
-           !wcscmp(cls, L"TopLevelWindowForOverflowXamlIsland") ||
-           !wcscmp(cls, L"Xaml_WindowedPopupClass");
+    g_perf.tClass += Qpc() - t0;
+    return IsShellWindowClass(cls);
 }
 
 void UpdateShellCursorFallback(int seat) {
@@ -593,6 +593,7 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
         // again", never to a double action. The inline wait also keeps the
         // press/release order intact: the physical release queues behind us
         // and is injected after the DOWN no matter how long we sleep here.
+        const int64_t tSettle = Qpc();
         HWND under = WindowFromPoint(p);
         if (under) {
             DWORD pidUnder = 0;
@@ -621,6 +622,7 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
                 }
             }
         }
+        g_perf.tSettle += Qpc() - tSettle;
 
         PinCursor(p);
         SendMouseAt(p, MOUSEEVENTF_MOVE);
@@ -1105,6 +1107,32 @@ void ApplyBindings() {
 
 void TrayMenu(HWND hwnd);   // defined with the other tray plumbing below
 
+// Peak of each step within one event, and a per-step breakdown of any event
+// over 20 ms, so a hitch names the step that took the time.
+void NoteEventSteps(const PerfStats& before, int64_t dt, DWORD lag, const wchar_t* src) {
+    const int64_t read  = g_perf.tRead    - before.tRead;
+    const int64_t pin   = g_perf.tPin     - before.tPin;
+    const int64_t over  = g_perf.tOverlay - before.tOverlay;
+    const int64_t shell = g_perf.tShell   - before.tShell;
+    const int64_t hit   = g_perf.tHit     - before.tHit;
+    const int64_t cls   = g_perf.tClass   - before.tClass;
+    const int64_t set   = g_perf.tSettle  - before.tSettle;
+    if (read  > g_perf.mRead)    g_perf.mRead    = read;
+    if (pin   > g_perf.mPin)     g_perf.mPin     = pin;
+    if (over  > g_perf.mOverlay) g_perf.mOverlay = over;
+    if (shell > g_perf.mShell)   g_perf.mShell   = shell;
+    if (hit   > g_perf.mHit)     g_perf.mHit     = hit;
+    if (cls   > g_perf.mClass)   g_perf.mClass   = cls;
+    if (!g_perfLog || !g_qpcFreq) return;
+    const double us = 1e6 / (double)g_qpcFreq;
+    if (dt * us < 20000) return;
+    const int64_t other = dt - read - pin - over - shell;
+    LogLine(L"[perf] slow %s event %.0f us: read=%.0f pin=%.0f overlay=%.0f shell=%.0f"
+            L" (hit=%.0f class=%.0f) settle=%.0f other=%.0f lag=%lu ms",
+            src, dt * us, read * us, pin * us, over * us, shell * us,
+            hit * us, cls * us, set * us, other * us, (unsigned long)lag);
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case kTrayCallbackMsg:
@@ -1114,10 +1142,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_INPUT: {
         g_heartbeat.fetch_add(1);
         const DWORD lag = GetTickCount() - (DWORD)GetMessageTime();
+        const PerfStats before = g_perf;
         const int64_t t0 = Qpc();
         OnRawInput(reinterpret_cast<HRAWINPUT>(lp));
         MaybeFlushPointers();
         const int64_t dt = Qpc() - t0;
+        NoteEventSteps(before, dt, lag, L"input");
         ++g_perf.events;
         g_perf.tTotal += dt;
         if (dt > g_perf.tMax) g_perf.tMax = dt;
@@ -1147,7 +1177,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         g_heartbeat.fetch_add(1);
-        if (wp == 1) FlushPointers();      // nothing left pending once the queue is idle
+        if (wp == 1) {                      // nothing left pending once the queue is idle
+            const PerfStats before = g_perf;
+            const int64_t t0 = Qpc();
+            FlushPointers();
+            NoteEventSteps(before, Qpc() - t0, 0, L"timer");
+        }
         if (wp == 1 && g_perfLog) {
             static int perfTick = 0;
             if (++perfTick >= 8 && g_perf.events) {   // every 2 s, only when moving
@@ -1161,6 +1196,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         g_perf.tRead * us / n, g_perf.tPin * us / f,
                         g_perf.tOverlay * us / f, g_perf.tShell * us / f,
                         g_perf.lagSum / n, g_perf.lagMax);
+                LogLine(L"[perf] peak per event us: read=%.0f pin=%.0f overlay=%.0f shell=%.0f"
+                        L" (hit=%.0f class=%.0f)",
+                        g_perf.mRead * us, g_perf.mPin * us, g_perf.mOverlay * us,
+                        g_perf.mShell * us, g_perf.mHit * us, g_perf.mClass * us);
                 g_perf = PerfStats{};
                 for (int i = 0; i < g_cfg.seatCount; ++i) {
                     AccelState& a = g_accel[i];

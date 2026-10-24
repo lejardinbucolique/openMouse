@@ -148,6 +148,7 @@ private:
 
 RECT VirtualScreenRect();
 void ClampToVirtualScreen(POINT& p);
+bool IsShellWindowClass(const wchar_t* cls);
 void LogLine(const wchar_t* fmt, ...);
 void OpenLogFile();
 void CloseLogFile();

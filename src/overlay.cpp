@@ -6,6 +6,7 @@
 // topmost window holding a 32bpp premultiplied-alpha bitmap of an arrow in the
 // seat's colour.
 #include "openmouse.h"
+#include <cwchar>
 
 namespace om {
 namespace {
@@ -266,6 +267,10 @@ bool CursorOverlay::ReassertTopmost(wchar_t* who, int whoLen) {
         DWORD pid = 0;
         GetWindowThreadProcessId(w, &pid);
         if (pid == self) continue;
+        // The shell's band sits above every topmost window: nothing reasserted under it can show.
+        wchar_t cls[64] = {};
+        GetClassNameW(w, cls, 63);
+        if (IsShellWindowClass(cls)) continue;
         cover = w;
         break;
     }
@@ -308,6 +313,16 @@ void ClampToVirtualScreen(POINT& p) {
     if (p.y < r.top)        p.y = r.top;
     if (p.x > r.right  - 1) p.x = r.right  - 1;
     if (p.y > r.bottom - 1) p.y = r.bottom - 1;
+}
+
+bool IsShellWindowClass(const wchar_t* cls) {
+    return !wcscmp(cls, L"Shell_TrayWnd") ||
+           !wcscmp(cls, L"Shell_SecondaryTrayWnd") ||
+           !wcscmp(cls, L"NotifyIconOverflowWindow") ||
+           !wcscmp(cls, L"Windows.UI.Core.CoreWindow") ||          // Start, search
+           !wcscmp(cls, L"XamlExplorerHostIslandWindow") ||        // Win11 taskbar
+           !wcscmp(cls, L"TopLevelWindowForOverflowXamlIsland") ||
+           !wcscmp(cls, L"Xaml_WindowedPopupClass");
 }
 
 } // namespace om
