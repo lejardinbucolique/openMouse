@@ -76,6 +76,21 @@ uint64_t g_dropInjected = 0, g_dropNullDev = 0;
 // unbounded log growth in normal use.
 bool g_verbose = false;
 
+// Latency measurement (--perf). Accumulated always — a few QPC reads per
+// event — but only written once every 2 s, and only with --perf, so it can be
+// run without --verbose (which changes nothing here, but floods the log).
+// "lag" is the age of a WM_INPUT when we dequeue it: if processing falls
+// behind the mouse, it climbs, and that IS the cursor trailing the hand.
+bool g_perfLog = false;
+struct PerfStats {
+    uint64_t events = 0, flushes = 0;
+    int64_t  tRead = 0, tPin = 0, tOverlay = 0, tShell = 0, tTotal = 0, tMax = 0;
+    DWORD    lagMax = 0;
+    uint64_t lagSum = 0;
+} g_perf;
+int64_t g_qpcFreq = 0;
+inline int64_t Qpc() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
+
 // Scancodes currently held down, per seat, for the panic combo and to keep one
 // seat's modifiers out of the other seat's typing. Tracked manually because
 // with NOLEGACY the async key-state table only reflects what we re-inject.
@@ -335,7 +350,9 @@ bool IsShellWindowAt(POINT p) {
 
 void UpdateShellCursorFallback(int seat) {
     if (!g_cursorHidden || !g_magReady || !g_mag.ShowSystemCursor) return;
+    const int64_t t0 = Qpc();
     const bool over = IsShellWindowAt(g_seats[seat].pos);
+    g_perf.tShell += Qpc() - t0;
     if (over == g_overShell) return;
     g_overShell = over;
     g_mag.ShowSystemCursor(over ? TRUE : FALSE);
@@ -373,12 +390,19 @@ void SetActiveSeat(int seat) {
     if (g_cursorHidden) UpdateShellCursorFallback(seat);
 }
 
-void MovePointer(int seat, int dx, int dy) {
+// Moves only update the logical position; the costly part — SetCursorPos,
+// SetWindowPos on the overlay, the shell hit-test — runs in FlushPointers,
+// once per drained burst of raw input instead of once per mouse report. At
+// 1000 Hz the per-report cost exceeded the report interval, so moves queued
+// up and the pointer kept travelling for a second or two after the hand
+// stopped.
+bool  g_dirty[kMaxSeats] = {};
+DWORD g_lastFlush = 0;
+
+void FlushSeat(int seat) {
+    if (!g_dirty[seat]) return;
+    g_dirty[seat] = false;
     Seat& s = g_seats[seat];
-    const double k = (seat < (int)g_cfg.sensitivity.size()) ? g_cfg.sensitivity[seat] : 1.0;
-    s.pos.x += (LONG)(dx * k);
-    s.pos.y += (LONG)(dy * k);
-    ClampToVirtualScreen(s.pos);
 
     // The owning seat still drives the real cursor — that is what keeps hover
     // states and click targeting following it — but when the cursor is hidden
@@ -386,16 +410,47 @@ void MovePointer(int seat, int dx, int dy) {
     // pointer to represent it.
     if (seat == g_activeSeat) {
         g_stats[seat].cursorSets++;
+        int64_t t0 = Qpc();
         PinCursor(s.pos);
+        g_perf.tPin += Qpc() - t0;
         if (g_cursorHidden) {
             g_stats[seat].overlaySets++;
+            t0 = Qpc();
             g_overlay[seat].MoveTo(s.pos);
+            g_perf.tOverlay += Qpc() - t0;
             UpdateShellCursorFallback(seat);
         }
     } else {
         g_stats[seat].overlaySets++;
+        const int64_t t0 = Qpc();
         g_overlay[seat].MoveTo(s.pos);
+        g_perf.tOverlay += Qpc() - t0;
     }
+}
+
+void FlushPointers() {
+    for (int i = 0; i < g_cfg.seatCount; ++i) FlushSeat(i);
+    g_lastFlush = GetTickCount();
+    ++g_perf.flushes;
+}
+
+// Flush when the raw-input queue is drained, or at least every 8 ms while a
+// continuous stream keeps it full, so the pointer never waits on a burst.
+void MaybeFlushPointers() {
+    bool any = false;
+    for (int i = 0; i < g_cfg.seatCount; ++i) any |= g_dirty[i];
+    if (!any) return;
+    const bool pending = (HIWORD(GetQueueStatus(QS_RAWINPUT)) & QS_RAWINPUT) != 0;
+    if (!pending || (GetTickCount() - g_lastFlush) >= 8) FlushPointers();
+}
+
+void MovePointer(int seat, int dx, int dy) {
+    Seat& s = g_seats[seat];
+    const double k = (seat < (int)g_cfg.sensitivity.size()) ? g_cfg.sensitivity[seat] : 1.0;
+    s.pos.x += (LONG)(dx * k);
+    s.pos.y += (LONG)(dy * k);
+    ClampToVirtualScreen(s.pos);
+    g_dirty[seat] = true;
 }
 
 void RememberClickTarget(int seat) {
@@ -604,12 +659,7 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
         p.y = v.top  + (LONG)(((int64_t)m.lLastY * (v.bottom - v.top))  / 65535);
         g_seats[seat].pos = p;
         ClampToVirtualScreen(g_seats[seat].pos);
-        if (seat == g_activeSeat) {
-            PinCursor(g_seats[seat].pos);
-            UpdateShellCursorFallback(seat);
-        } else {
-            g_overlay[seat].MoveTo(p);
-        }
+        g_dirty[seat] = true;
     } else if (m.lLastX || m.lLastY) {
         MovePointer(seat, m.lLastX, m.lLastY);
     }
@@ -622,6 +672,8 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
             LogLine(L"[phys] dev=%p seat=%d flags=%04X pos=%ld,%ld t=%lu",
                     dev, seat, m.usButtonFlags, g_seats[seat].pos.x, g_seats[seat].pos.y,
                     GetTickCount());
+        // Buttons act on positions: bring every pointer up to date first.
+        FlushPointers();
         HandleButton(seat, m.usButtonFlags, m.usButtonData);
     }
 
@@ -708,7 +760,9 @@ void OnRawInput(HRAWINPUT h) {
     if (size == 0 || size > 4096) return;
 
     BYTE stack[4096];
+    const int64_t t0 = Qpc();
     if (GetRawInputData(h, RID_INPUT, stack, &size, sizeof(RAWINPUTHEADER)) != size) return;
+    g_perf.tRead += Qpc() - t0;
 
     ++g_wmInputTotal;
     auto* ri = reinterpret_cast<RAWINPUT*>(stack);
@@ -984,10 +1038,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU || lp == WM_LBUTTONUP)
             TrayMenu(hwnd);
         return 0;
-    case WM_INPUT:
+    case WM_INPUT: {
         g_heartbeat.fetch_add(1);
+        const DWORD lag = GetTickCount() - (DWORD)GetMessageTime();
+        const int64_t t0 = Qpc();
         OnRawInput(reinterpret_cast<HRAWINPUT>(lp));
+        MaybeFlushPointers();
+        const int64_t dt = Qpc() - t0;
+        ++g_perf.events;
+        g_perf.tTotal += dt;
+        if (dt > g_perf.tMax) g_perf.tMax = dt;
+        g_perf.lagSum += lag;
+        if (lag > g_perf.lagMax) g_perf.lagMax = lag;
         return 0;
+    }
 
     case WM_INPUT_DEVICE_CHANGE:
         // One of these arrives per device the moment we register, so a machine
@@ -1009,6 +1073,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         g_heartbeat.fetch_add(1);
+        if (wp == 1) FlushPointers();      // nothing left pending once the queue is idle
+        if (wp == 1 && g_perfLog) {
+            static int perfTick = 0;
+            if (++perfTick >= 8 && g_perf.events) {   // every 2 s, only when moving
+                perfTick = 0;
+                const double us = g_qpcFreq ? 1e6 / (double)g_qpcFreq : 0;
+                const double n  = (double)g_perf.events;
+                const double f  = g_perf.flushes ? (double)g_perf.flushes : 1;
+                LogLine(L"[perf] %.0f ev/s  flush/s=%.0f  per-event us: total=%.1f max=%.0f read=%.1f"
+                        L"  per-flush us: pin=%.1f overlay=%.1f shell=%.1f  lag ms: avg=%.1f max=%lu",
+                        n / 2.0, f / 2.0, g_perf.tTotal * us / n, g_perf.tMax * us,
+                        g_perf.tRead * us / n, g_perf.tPin * us / f,
+                        g_perf.tOverlay * us / f, g_perf.tShell * us / f,
+                        g_perf.lagSum / n, g_perf.lagMax);
+                g_perf = PerfStats{};
+            } else if (perfTick >= 8) {
+                perfTick = 0;
+                g_perf = PerfStats{};
+            }
+        }
         if (wp == 1) {
             // The system silently drops clip rects on some foreground
             // changes; reassert the cage wherever it was last placed. Placed,
@@ -2005,6 +2089,7 @@ int RunMain(HINSTANCE inst) {
     for (int i = 0; i < g_cfg.seatCount; ++i)
         LogLine(L"  seat %d start pos %ld,%ld", i, g_seats[i].pos.x, g_seats[i].pos.y);
 
+    { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcFreq = f.QuadPart; }
     SetTimer(g_hwnd, 1, 250, nullptr);
 
     if (g_runSeconds > 0) {
@@ -2068,6 +2153,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             a == L"--receiver" || a == L"--monitor" || a == L"--help") mode = a;
         else if (a == L"--verbose")
             om::g_verbose = true;
+        else if (a == L"--perf")
+            om::g_perfLog = true;
         else if (a == L"--cage")
             om::g_eatMoves = false;   // force the old ClipCursor behaviour
         else if (a.rfind(L"--seconds=", 0) == 0)
@@ -2120,6 +2207,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"");
         om::LogLine(L"  Run flags:  --verbose        per-event tracing to the log");
         om::LogLine(L"              --seconds=N     auto-exit after N seconds");
+        om::LogLine(L"              --perf          input latency figures every 2 s");
         om::LogLine(L"");
         om::LogLine(L"  Panic key while running: Ctrl+Alt+Shift+Q");
         om::LogLine(L"  Tray icon: right-click to stop, re-identify, or open the log folder");
