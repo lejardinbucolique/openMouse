@@ -122,7 +122,11 @@ bool Config::Load(const std::wstring& path) {
             if (idx >= 0 && idx < kMaxSeats) {
                 if ((int)sensitivity.size() <= idx) sensitivity.resize(idx + 1, 1.0);
                 if ((int)seatColors.size()  <= idx) seatColors.resize(idx + 1, RGB(200,200,200));
+                if ((int)accel.size()       <= idx) accel.resize(idx + 1);
                 if (key == L"sensitivity") sensitivity[idx] = _wtof(val.c_str());
+                else if (key == L"accel_slow")  { accel[idx].on = true; accel[idx].slow  = _wtof(val.c_str()); }
+                else if (key == L"accel_fast")  { accel[idx].on = true; accel[idx].fast  = _wtof(val.c_str()); }
+                else if (key == L"accel_speed") { accel[idx].on = true; accel[idx].speed = _wtof(val.c_str()); }
                 else if (key == L"color") {
                     const unsigned long v = wcstoul(val.c_str(), nullptr, 16);
                     seatColors[idx] = RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
@@ -153,6 +157,12 @@ bool Config::Save(const std::wstring& path) const {
         swprintf(buf, 128, L"[seat%d]\ncolor=%02X%02X%02X\nsensitivity=%.2f\n\n",
                  i, GetRValue(c), GetGValue(c), GetBValue(c), s);
         t += buf;
+        if (i < (int)accel.size() && accel[i].on) {
+            t.resize(t.size() - 1);   // keep the accel keys inside the section
+            swprintf(buf, 128, L"accel_slow=%.2f\naccel_fast=%.2f\naccel_speed=%.2f\n\n",
+                     accel[i].slow, accel[i].fast, accel[i].speed);
+            t += buf;
+        }
     }
 
     t += L"[mouse]\n";

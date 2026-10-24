@@ -192,6 +192,22 @@ Any other `color` value tints the arrow body and keeps the dark outline. `sensit
 is a per-seat pointer speed multiplier. Up to eight seats are supported by the code;
 only two have been tested.
 
+Optional pointer acceleration, per seat. As soon as any of these keys is present in a
+`[seatN]` section, it replaces `sensitivity` for that seat; without them the fixed
+multiplier applies as before:
+
+```ini
+accel_slow=1.00    ; gain for very slow motion: about 1 pixel per device count
+accel_fast=8.00    ; gain ceiling for fast sweeps across the screen
+accel_speed=2.00   ; hand speed (device counts per ms) where the gain is halfway up
+```
+
+The gain rises smoothly with speed (`slow + (fast - slow) * v² / (v² + speed²)`), with
+no visible step, and pixel fractions carry over between moves so slow motion glides.
+A USB mouse rarely exceeds 2 to 4 counts per ms, hence the low default threshold. A
+touchpad reports a different step scale; tune each seat separately (`--perf` logs
+each seat's speed and gain every two seconds of motion).
+
 Once measured bindings exist, unmatched interfaces are dropped as ghost collections of
 already-bound hardware. On a first run with no bindings at all, devices are auto-assigned
 round-robin so nothing is dead out of the box, but run `--identify` before trusting the

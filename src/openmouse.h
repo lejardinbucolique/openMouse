@@ -91,6 +91,20 @@ struct Config {
     // Pointer speed multiplier per seat index.
     std::vector<double> sensitivity = {1.0, 1.0, 1.0, 1.0};
 
+    // Optional per-seat pointer acceleration. Off unless one of the accel_*
+    // keys appears in the seat's section; then the fixed sensitivity is
+    // replaced by a gain that rises smoothly with hand speed:
+    //   gain = slow + (fast - slow) * v^2 / (v^2 + speed^2)
+    // v is the device speed in counts per millisecond, smoothed per seat.
+    // A USB mouse and a touchpad report different step sizes, hence per seat.
+    struct Accel {
+        bool   on    = false;
+        double slow  = 1.0;   // gain for very slow, precise motion
+        double fast  = 8.0;   // ceiling for fast sweeps across the screen
+        double speed = 2.0;   // counts/ms where the gain is halfway up (USB mouse: 2)
+    };
+    std::vector<Accel> accel = std::vector<Accel>(4);
+
     // Draw a coloured ring around the seat that currently owns the real
     // system cursor.
     bool markActiveSeat = true;

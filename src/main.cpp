@@ -28,6 +28,7 @@
 #include <set>
 #include <thread>
 #include <cstdio>
+#include <cmath>
 
 namespace om {
 namespace {
@@ -444,11 +445,71 @@ void MaybeFlushPointers() {
     if (!pending || (GetTickCount() - g_lastFlush) >= 8) FlushPointers();
 }
 
+// Per-seat acceleration state: hand speed and the sub-pixel remainder
+// carried from one move to the next, so slow motion is not lost to
+// truncation and glides instead of stepping.
+//
+// Speed is measured on the time each WM_INPUT was POSTED (GetMessageTime),
+// not when we get round to processing it: the UI thread can stall for
+// 50-190 ms, and timing on processing would read a backlog as a pause and
+// then as a burst. Posting time has the tick's ~16 ms granularity, so the
+// speed is the distance covered over windows a few ticks wide.
+constexpr DWORD kSpeedWindowMs = 48;
+constexpr DWORD kAttackWindowMs = 32;   // two ticks: shortest window that is not noise
+constexpr DWORD kIdleResetMs   = 100;
+struct AccelState {
+    struct Step { DWORD t; double d; };
+    Step     ring[128]{};
+    int      head = 0, count = 0;
+    DWORD    lastT = 0;
+    double   v = 0, rx = 0, ry = 0;
+    // --perf: speed and gain seen since the last report.
+    uint64_t n = 0; double vSum = 0, vMax = 0, gSum = 0, gMax = 0;
+};
+AccelState g_accel[kMaxSeats];
+
 void MovePointer(int seat, int dx, int dy) {
     Seat& s = g_seats[seat];
     const double k = (seat < (int)g_cfg.sensitivity.size()) ? g_cfg.sensitivity[seat] : 1.0;
-    s.pos.x += (LONG)(dx * k);
-    s.pos.y += (LONG)(dy * k);
+    if (seat >= (int)g_cfg.accel.size() || !g_cfg.accel[seat].on) {
+        s.pos.x += (LONG)(dx * k);
+        s.pos.y += (LONG)(dy * k);
+    } else {
+        const Config::Accel& c = g_cfg.accel[seat];
+        AccelState& a = g_accel[seat];
+        const DWORD now = (DWORD)GetMessageTime();
+        // A real pause of the hand (by posting time) starts afresh.
+        if (a.count && now - a.lastT > kIdleResetMs) { a.count = 0; a.rx = a.ry = 0; }
+        a.lastT = now;
+        const int cap = (int)(sizeof(a.ring) / sizeof(a.ring[0]));
+        a.ring[a.head] = { now, std::sqrt((double)dx * dx + (double)dy * dy) };
+        a.head = (a.head + 1) % cap;
+        if (a.count < cap) ++a.count;
+        // Fast attack, slow decay: the short window catches a hand speeding
+        // up (or leaving a turn) within a couple of ticks, the long one
+        // keeps the gain from collapsing on a brief slowdown.
+        double dist = 0, distShort = 0;
+        for (int i = 0; i < a.count; ++i) {
+            const AccelState::Step& st = a.ring[(a.head - 1 - i + cap) % cap];
+            if (now - st.t > kSpeedWindowMs) break;
+            dist += st.d;
+            if (now - st.t <= kAttackWindowMs) distShort += st.d;
+        }
+        const double vLong = dist / (double)kSpeedWindowMs;          // counts per ms
+        const double vShort = distShort / (double)kAttackWindowMs;
+        a.v = vShort > vLong ? vShort : vLong;
+        const double v2 = a.v * a.v, s2 = c.speed * c.speed;
+        const double g = c.slow + (c.fast - c.slow) * (s2 > 0 ? v2 / (v2 + s2) : 1.0);
+        ++a.n; a.vSum += a.v; a.gSum += g;
+        if (a.v > a.vMax) a.vMax = a.v;
+        if (g > a.gMax) a.gMax = g;
+        a.rx += dx * g;
+        a.ry += dy * g;
+        const LONG mx = (LONG)a.rx, my = (LONG)a.ry;
+        a.rx -= mx; a.ry -= my;
+        s.pos.x += mx;
+        s.pos.y += my;
+    }
     ClampToVirtualScreen(s.pos);
     g_dirty[seat] = true;
 }
@@ -1101,6 +1162,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         g_perf.tOverlay * us / f, g_perf.tShell * us / f,
                         g_perf.lagSum / n, g_perf.lagMax);
                 g_perf = PerfStats{};
+                for (int i = 0; i < g_cfg.seatCount; ++i) {
+                    AccelState& a = g_accel[i];
+                    if (!a.n) continue;
+                    LogLine(L"[perf] seat%d accel: moves=%llu  speed counts/ms: avg=%.2f max=%.2f"
+                            L"  gain: avg=%.2f max=%.2f",
+                            i, a.n, a.vSum / a.n, a.vMax, a.gSum / a.n, a.gMax);
+                    a.n = 0; a.vSum = a.vMax = a.gSum = a.gMax = 0;
+                }
             } else if (perfTick >= 8) {
                 perfTick = 0;
                 g_perf = PerfStats{};
