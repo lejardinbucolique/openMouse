@@ -241,8 +241,19 @@ void CursorOverlay::Render(COLORREF color) {
 void CursorOverlay::MoveTo(POINT ptVirtual) {
     if (!hwnd_) return;
     // Offset by the real hotspot so the tip lands on the logical position.
-    SetWindowPos(hwnd_, HWND_TOPMOST, ptVirtual.x - hotX_, ptVirtual.y - hotY_, 0, 0,
-                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+    // UpdateLayeredWindow with only a destination point moves the layered
+    // window without touching its content or z-order, which is far cheaper
+    // than SetWindowPos(HWND_TOPMOST) on every move (26 to 54 ms measured).
+    POINT dst{ptVirtual.x - hotX_, ptVirtual.y - hotY_};
+    UpdateLayeredWindow(hwnd_, nullptr, &dst, nullptr, nullptr, nullptr, 0, nullptr, 0);
+
+    // Other topmost windows can still come above us; reassert once a second.
+    const DWORD now = GetTickCount();
+    if (now - lastTopmost_ >= 1000) {
+        lastTopmost_ = now;
+        SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+    }
 }
 
 void CursorOverlay::Show(bool visible) {

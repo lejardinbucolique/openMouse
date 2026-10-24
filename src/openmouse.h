@@ -124,6 +124,7 @@ private:
     int      w_ = 0, h_ = 0;
     int      hotX_ = 1, hotY_ = 1;   // from the system cursor when available
     bool     visible_ = false;
+    DWORD    lastTopmost_ = 0;
 };
 
 // ---------------------------------------------------------------- utilities
