@@ -806,6 +806,18 @@ HHOOK g_mouseGate = nullptr;
 bool                  g_eatMoves = true;
 std::atomic<uint64_t> g_gateEatenMoves{0};
 
+// Logs any timer tick that runs long under --perf: the timers share the thread
+// that reads the mice, so a slow tick shows up as a pointer hitch.
+struct TimerProbe {
+    WPARAM  id;
+    int64_t t0 = Qpc();
+    explicit TimerProbe(WPARAM i) : id(i) {}
+    ~TimerProbe() {
+        if (!g_perfLog || !g_qpcFreq) return;
+        const double us = (Qpc() - t0) * 1e6 / (double)g_qpcFreq;
+        if (us >= 5000) LogLine(L"[perf] timer %u took %.0f us", (unsigned)id, us);
+    }
+};
 LRESULT CALLBACK MouseGate(int code, WPARAM wp, LPARAM lp) {
     if (code == HC_ACTION && lp) {
         const auto* m = reinterpret_cast<const MSLLHOOKSTRUCT*>(lp);
@@ -1061,7 +1073,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTimer(hwnd, 3, 500, nullptr);
         return 0;
 
-    case WM_TIMER:
+    case WM_TIMER: {
+        TimerProbe probe(wp);
         if (wp == 3) {                      // coalesced device-change rescan
             KillTimer(hwnd, 3);
             ApplyBindings();
@@ -1124,6 +1137,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 lastRaw   = raw;
                 lastEaten = eaten;
+
+                // Other topmost windows can come above the arrows. Reassert
+                // here rather than on the move path, and only when covered.
+                for (int i = 0; i < kMaxSeats; ++i) {
+                    const int64_t t0 = Qpc();
+                    wchar_t who[64] = L"";
+                    if (g_overlay[i].ReassertTopmost(who, 64) && g_perfLog) {
+                        const double us = g_qpcFreq ? 1e6 / (double)g_qpcFreq : 0;
+                        LogLine(L"[perf] topmost seat %d reasserted in %.0f us (under %s)", i, (Qpc() - t0) * us, who);
+                    }
+                }
             }
         }
         if (wp == 1 && g_verbose) {
@@ -1160,6 +1184,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         return 0;
+    }
 
     case WM_CLOSE:
         UnregisterCapture();

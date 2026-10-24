@@ -113,6 +113,10 @@ public:
     void MoveTo(POINT ptVirtual);
     void Show(bool visible);
     bool IsVisible() const { return visible_; }
+    // Brings the arrow back above other topmost windows, only when a visible
+    // topmost window of another process sits above it. Returns true if
+    // SetWindowPos was called; who then gets that window's class name.
+    bool ReassertTopmost(wchar_t* who = nullptr, int whoLen = 0);
 
 private:
     void Render(COLORREF color);
@@ -124,7 +128,6 @@ private:
     int      w_ = 0, h_ = 0;
     int      hotX_ = 1, hotY_ = 1;   // from the system cursor when available
     bool     visible_ = false;
-    DWORD    lastTopmost_ = 0;
 };
 
 // ---------------------------------------------------------------- utilities

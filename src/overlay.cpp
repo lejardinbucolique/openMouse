@@ -246,14 +246,37 @@ void CursorOverlay::MoveTo(POINT ptVirtual) {
     // than SetWindowPos(HWND_TOPMOST) on every move (26 to 54 ms measured).
     POINT dst{ptVirtual.x - hotX_, ptVirtual.y - hotY_};
     UpdateLayeredWindow(hwnd_, nullptr, &dst, nullptr, nullptr, nullptr, 0, nullptr, 0);
+    // The z-order is reasserted from the timer (ReassertTopmost), not here:
+    // even once a second, SetWindowPos on the move path showed as 50 to
+    // 100 ms hitches.
+}
 
-    // Other topmost windows can still come above us; reassert once a second.
-    const DWORD now = GetTickCount();
-    if (now - lastTopmost_ >= 1000) {
-        lastTopmost_ = now;
-        SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+bool CursorOverlay::ReassertTopmost(wchar_t* who, int whoLen) {
+    if (!hwnd_ || !visible_) return false;
+    // Walking up the z-order is cheap; SetWindowPos is not. Only pay for it
+    // when a visible topmost window of another process sits above the arrow.
+    // Our own windows must not count: the two arrows are both topmost, so
+    // each reassert put the other one underneath and they swapped every
+    // second, 50 to 100 ms each.
+    const DWORD self = GetCurrentProcessId();
+    HWND cover = nullptr;
+    for (HWND w = GetWindow(hwnd_, GW_HWNDPREV); w; w = GetWindow(w, GW_HWNDPREV)) {
+        if (!IsWindowVisible(w)) continue;
+        if (!(GetWindowLongW(w, GWL_EXSTYLE) & WS_EX_TOPMOST)) continue;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(w, &pid);
+        if (pid == self) continue;
+        cover = w;
+        break;
     }
+    if (!cover) return false;
+    if (who && whoLen > 0) {
+        who[0] = 0;
+        GetClassNameW(cover, who, whoLen);
+    }
+    SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+    return true;
 }
 
 void CursorOverlay::Show(bool visible) {
