@@ -534,6 +534,24 @@ bool OwnerDragging() {
     return o.lDown || o.rDown || o.mDown || o.x1Down || o.x2Down;
 }
 
+// True when the press targets a menu or a popup of the foreground window.
+// Menus (class #32768, Chrome's own popups, tray menus) are never the
+// foreground window: their owner is. Taking the foreground for them dismisses
+// the menu before the click lands, so the entry never fires — and the click,
+// arriving after the menu closed, falls through to the window underneath.
+bool IsMenuTarget(HWND under, HWND root, const wchar_t** why) {
+    GUITHREADINFO gti{ sizeof(gti) };
+    if (GetGUIThreadInfo(0, &gti) && (gti.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE))) {
+        *why = L"menu mode";
+        return true;
+    }
+    if (!wcscmp(ClassOf(root), L"#32768")) { *why = L"menu class"; return true; }
+    if (GetWindowLongW(root, GWL_EXSTYLE) & WS_EX_NOACTIVATE) { *why = L"no-activate"; return true; }
+    HWND fg = GetForegroundWindow();
+    if (fg && GetAncestor(under, GA_ROOTOWNER) == fg) { *why = L"popup of foreground"; return true; }
+    return false;
+}
+
 void HandleButton(int seat, USHORT flags, USHORT data) {
     // Physical arrival time, captured before any settle sleeps distort it —
     // the anti-compression pacing below compares against this.
@@ -602,7 +620,12 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
                 g_seats[seat].focusTarget = under;
 
                 HWND root = GetAncestor(under, GA_ROOT);
-                if (root && root != GetForegroundWindow()) {
+                const wchar_t* menuWhy = nullptr;
+                if (root && root != GetForegroundWindow() && IsMenuTarget(under, root, &menuWhy)) {
+                    if (g_verbose)
+                        LogLine(L"[click] seat %d press on %p [%s] pid %lu (%s) — foreground left alone",
+                                seat, root, ClassOf(root), pidUnder, menuWhy);
+                } else if (root && root != GetForegroundWindow()) {
                     ClaimForeground(under);
                     int polls = 0;
                     while (polls < 20 && GetForegroundWindow() != root) { Sleep(10); ++polls; }
