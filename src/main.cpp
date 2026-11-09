@@ -431,6 +431,24 @@ bool  g_dirty[kMaxSeats] = {};
 DWORD g_lastFlush = 0;
 
 void LogDragState(int seat, POINT p);   // OP23 diagnostics, defined with HandleButton
+bool OwnerDragging();                   // defined with HandleButton
+
+// True when a non-owner seat at p should take the real cursor without a
+// click: on the outermost pixel of its monitor (where an auto-hidden taskbar
+// waits for the cursor) or over shell UI (taskbar, tray, notifications).
+bool WantsShellHandover(POINT p) {
+    if (OwnerDragging()) return false;
+    MONITORINFO mi{ sizeof(mi) };
+    if (GetMonitorInfoW(MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST), &mi)) {
+        const RECT& r = mi.rcMonitor;
+        if (p.x <= r.left || p.y <= r.top || p.x >= r.right - 1 || p.y >= r.bottom - 1)
+            return true;
+    }
+    const int64_t t0 = Qpc();
+    const bool over = IsShellWindowAt(p);
+    g_perf.tShell += Qpc() - t0;
+    return over;
+}
 
 void FlushSeat(int seat) {
     if (!g_dirty[seat]) return;
@@ -454,6 +472,16 @@ void FlushSeat(int seat) {
             g_perf.tOverlay += Qpc() - t0;
             UpdateShellCursorFallback(seat);
         }
+    } else if (WantsShellHandover(s.pos)) {
+        // The shell only reacts to the real cursor: an auto-hidden taskbar
+        // rises when IT reaches the screen edge, and toasts and tray flyouts
+        // sit above every overlay. A seat that never clicked does not hold
+        // that cursor, so hovering the edge or shell UI hands it over — no
+        // click needed. Never during the owner's drag: that would yank the
+        // cursor out of the drag.
+        if (g_verbose) LogLine(L"[owner] seat %d takes the cursor on shell hover", seat);
+        g_overlay[seat].MoveTo(s.pos);
+        SetActiveSeat(seat);
     } else {
         g_stats[seat].overlaySets++;
         const int64_t t0 = Qpc();
