@@ -773,6 +773,65 @@ void LogDragState(int seat, POINT p) {
             ok ? gti.hwndCapture : nullptr, ok ? ClassOf(gti.hwndCapture) : L"", ok ? gti.hwndActive : nullptr);
 }
 
+// Waiting inside a press used to be a plain Sleep on this, the input thread:
+// every pointer, the keyboard steering and the other seat froze for up to a
+// second. Now the wait keeps draining WM_INPUT, so movement flows on. Button
+// events that arrive meanwhile (any seat) are parked in arrival order and
+// replayed once the press that is waiting has been injected — that keeps the
+// press/release order the inline sleep guaranteed. Only WM_INPUT is pumped:
+// other messages wait, as they did behind the Sleep.
+struct DeferredButton { int seat; USHORT flags; USHORT data; POINT pos; };
+static std::vector<DeferredButton> g_deferredButtons;
+static int g_waitDepth = 0;
+
+void OnRawInput(HRAWINPUT h);
+
+// Waits up to `ms`, returning early once `done()` holds (checked every 10 ms
+// or so, and after each input). Returns the time actually waited.
+template <class Done>
+DWORD WaitPumpingInput(DWORD ms, Done done) {
+    const DWORD start = GetTickCount();
+    ++g_waitDepth;
+    for (;;) {
+        if (done()) break;
+        const DWORD spent = GetTickCount() - start;
+        if (spent >= ms) break;
+        MSG msg;
+        if (PeekMessageW(&msg, nullptr, WM_INPUT, WM_INPUT, PM_REMOVE)) {
+            g_heartbeat.fetch_add(1);
+            OnRawInput(reinterpret_cast<HRAWINPUT>(msg.lParam));
+            MaybeFlushPointers();
+            continue;
+        }
+        const DWORD left = ms - spent;
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, left < 10 ? left : 10, QS_RAWINPUT);
+    }
+    --g_waitDepth;
+    return GetTickCount() - start;
+}
+
+void HandleButton(int seat, USHORT flags, USHORT data);
+
+// Entry point for every relayed button event: parked while a press waits,
+// handled now otherwise, then whatever got parked meanwhile is replayed.
+void RelayButton(int seat, USHORT flags, USHORT data) {
+    if (g_waitDepth > 0) {
+        g_deferredButtons.push_back({ seat, flags, data, g_seats[seat].pos });
+        return;
+    }
+    HandleButton(seat, flags, data);
+    while (!g_deferredButtons.empty()) {
+        const DeferredButton d = g_deferredButtons.front();
+        g_deferredButtons.erase(g_deferredButtons.begin());
+        // Act where the pointer was when the button moved, not where the
+        // hand has carried it since.
+        const POINT now = g_seats[d.seat].pos;
+        g_seats[d.seat].pos = d.pos;
+        HandleButton(d.seat, d.flags, d.data);
+        g_seats[d.seat].pos = now;
+    }
+}
+
 void HandleButton(int seat, USHORT flags, USHORT data) {
     // Physical arrival time, captured before any settle sleeps distort it —
     // the anti-compression pacing below compares against this.
@@ -848,21 +907,21 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
                                 seat, root, ClassOf(root), pidUnder, menuWhy);
                 } else if (root && root != GetForegroundWindow()) {
                     ClaimForeground(under);
-                    int polls = 0;
-                    while (polls < 20 && GetForegroundWindow() != root) { Sleep(10); ++polls; }
+                    const DWORD fgMs = WaitPumpingInput(200, [root] { return GetForegroundWindow() == root; });
                     if (g_verbose)
-                        LogLine(L"[click] seat %d cross-window -> %p [%s]  fg settled in %d ms",
-                                seat, root, ClassOf(root), polls * 10);
+                        LogLine(L"[click] seat %d cross-window -> %p [%s]  fg settled in %lu ms",
+                                seat, root, ClassOf(root), fgMs);
 
-                    // The settle is an inline sleep, deliberately. A deferred
-                    // press flushed from WM_TIMER was tried and reverted:
-                    // timers only fire on an empty queue, and raw input keeps
-                    // the queue full whenever any mouse moves, so deferred
-                    // clicks starved. Known cost of the sleep: a drag BEGUN
+                    // The settle waits inline, deliberately. A deferred press
+                    // flushed from WM_TIMER was tried and reverted: timers
+                    // only fire on an empty queue, and raw input keeps the
+                    // queue full whenever any mouse moves, so deferred clicks
+                    // starved. The wait pumps raw input instead of sleeping,
+                    // so pointers keep moving. Known cost: a drag BEGUN
                     // cross-window during these 250 ms is time-compressed and
                     // will not register — start cross-window drags with a
                     // separate click first, or accept one dragger at a time.
-                    Sleep(250);
+                    WaitPumpingInput(250, [] { return false; });
                 }
             }
         }
@@ -898,7 +957,7 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
                 if (g_verbose)
                     LogLine(L"[pace] seat %d padding %lu ms (physGap=%lu injGap=%lu)",
                             seat, pad, physGap, injGap);
-                Sleep(pad);
+                WaitPumpingInput(pad, [] { return false; });
                 now = GetTickCount();
             }
         }
@@ -1003,7 +1062,7 @@ void RunMapped(int seat, int idx, bool down) {
     if (!f) return;
     if (g_verbose) LogLine(L"[button] seat %d %s %s", seat, b.sig.c_str(), down ? L"down" : L"up");
     FlushPointers();
-    HandleButton(seat, f, 0);
+    RelayButton(seat, f, 0);
 }
 
 void ReleaseHeldButtons() {
@@ -1269,7 +1328,7 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
         USHORT flags = m.usButtonFlags;
         if (g_learnSeat == seat) flags = LearnFromMouse(seat, flags);
         flags = RemapMouseButtons(seat, flags);
-        if (flags) HandleButton(seat, flags, m.usButtonData);
+        if (flags) RelayButton(seat, flags, m.usButtonData);
     }
 
     // RIDEV_NOLEGACY does NOT stop Windows moving the single hardware cursor
