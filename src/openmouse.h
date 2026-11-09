@@ -119,6 +119,22 @@ struct Seat {
     DWORD    lastPressArrive = 0, lastPressInject = 0;
 };
 
+// ---------------------------------------------------------------- cursor looks
+
+// A set of pointers, all derived from the system cursors so that every shape
+// (arrow, hand, text bar, resize arrows, hourglass, forbidden) exists in every
+// set, in the colour of the mouse. Stored in the ini as the name in
+// CursorStyleKey.
+enum CursorStyle { kStyleClassic = 0,   // body in the mouse colour, black edge
+                   kStyleBright,        // the same with a bright white rim: seen on any background
+                   kStyleInverse,       // white body, edge in the mouse colour, dark rim
+                   kStyleBig,           // bright, one and a half times larger
+                   kStyleGlow,          // body in the mouse colour, soft glow of that colour
+                   kStyleCount };
+
+const wchar_t* CursorStyleKey(int style);       // "bright"...
+int            CursorStyleFromKey(const std::wstring& key, int fallback);
+
 // ---------------------------------------------------------------- config
 
 // What a learned button does. The clicks are played at the position of the
@@ -165,7 +181,7 @@ struct Config {
     std::map<std::wstring, int> keyboardBinding;
 
     std::vector<COLORREF> seatColors = {
-        RGB(0x4A, 0x90, 0xD9),   // seat 0 — blue
+        RGB(0xFF, 0xDD, 0x00),   // seat 0 — bright yellow (blue vanished on busy screens)
         RGB(0xE8, 0x6A, 0x33),   // seat 1 — orange
         RGB(0x5C, 0xB8, 0x5C),   // seat 2 — green
         RGB(0xB0, 0x60, 0xC0),   // seat 3 — purple
@@ -197,6 +213,9 @@ struct Config {
     // screen that is not plugged in behaves as empty, so the pointer is never
     // shut in a rectangle nobody can see; the key is kept for when it returns.
     std::vector<std::wstring> screen = std::vector<std::wstring>(4);
+
+    // How each seat's arrow is drawn (a CursorStyle, ini key "cursor").
+    std::vector<int> cursorStyle = std::vector<int>(kMaxSeats, (int)kStyleBright);
 
     // Buttons learned for each seat's mouse (see ButtonMap).
     std::vector<std::vector<ButtonMap>> buttons = std::vector<std::vector<ButtonMap>>(kMaxSeats);
@@ -242,9 +261,19 @@ bool ReadLearnResult(int& seat, std::wstring& sig, std::wstring& label);
 enum class PointerShape { Arrow, SizeWE, SizeNS, SizeNWSE, SizeNESW,
                           Hand, IBeam, No, Wait, AppStarting, Cross, SizeAll, Count };
 
+// One pointer image, premultiplied BGRA as UpdateLayeredWindow wants it.
+struct PointerImage {
+    int w = 0, h = 0, hotX = 0, hotY = 0;
+    std::vector<BYTE> bgra;
+};
+// Draws a shape of a set in a colour. False when nothing can be drawn.
+bool RenderPointer(PointerShape shape, COLORREF color, int style, PointerImage& out);
+
 class CursorOverlay {
 public:
-    bool Create(HINSTANCE inst, int seatIndex, COLORREF color);
+    bool Create(HINSTANCE inst, int seatIndex, COLORREF color, int style);
+    // Changes colour and set; the arrow is redrawn at once when it changed.
+    void SetLook(COLORREF color, int style);
     void SetShape(PointerShape shape);
     void Destroy();
     void MoveTo(POINT ptVirtual);
@@ -256,10 +285,7 @@ public:
     bool ReassertTopmost(wchar_t* who = nullptr, int whoLen = 0);
 
 private:
-    void Render(COLORREF color);
     void Present(PointerShape shape);
-    bool RenderFromSystemCursor(COLORREF color, LPCWSTR id, std::vector<BYTE>& out);
-    void RenderFallbackArrow(COLORREF color, std::vector<BYTE>& out);
 
     HWND     hwnd_    = nullptr;
     HBITMAP  bitmap_  = nullptr;
@@ -274,6 +300,7 @@ private:
     ShapeBmp     shapes_[kShapes];
     PointerShape shape_ = PointerShape::Arrow;
     COLORREF     color_ = 0;
+    int          style_ = kStyleBright;
     POINT        at_{ 0, 0 };        // last logical position, to re-place the arrow on a shape swap
 };
 

@@ -42,8 +42,8 @@ until you run `--probe` and `--probe-echo` there.
 ## What it does
 
 - Each connected mouse drives its own pointer, drawn with the machine's real cursor
-  artwork. Seat 0 gets the standard white arrow, seat 1 the black scheme; further seats
-  are tinted to their configured colour.
+  artwork, tinted to the colour of its mouse (seat 0 starts bright yellow, seat 1 orange)
+  and set off by a bright rim, or another set of pointers chosen per mouse.
 - Exactly one seat owns the click stream at a time. Clicking transfers ownership, so
   clicks land where the clicker is pointing and hover states follow them. Clicking into
   a window that is not focused activates it and delivers the click in one press.
@@ -170,12 +170,14 @@ injects keystrokes, so it cannot break typing; see
 ## Configuration
 
 The tray menu's **Settings…** entry (or `openmouse.exe --settings`) opens a window with,
-for each seat, the sensitivity and the acceleration sliders described below. A change is
+for each seat, the colour and the set of pointers (with a preview on a white, a dark, a
+green and a yellow background), the sensitivity and the acceleration sliders described
+below. A change is
 written to the configuration file and taken by the running engine at once; **Undo my
 changes** puts back the values the window opened with. The window runs as a process of
 its own, so it never shares a thread with the input path. It speaks French when Windows
-does, English otherwise. Device bindings, colours and the seat count are still set in the
-file for now.
+does, English otherwise. Device bindings and the seat count are still set in the file for
+now.
 
 `%APPDATA%\openMouse\openmouse.ini`
 
@@ -187,11 +189,13 @@ capture_keyboards=0
 mark_active_seat=1
 
 [seat0]
-color=FFFFFF          ; FFFFFF renders the stock white arrow, untinted
+color=FFDD00          ; FFFFFF renders the stock white arrow, 000000 the black scheme
+cursor=bright         ; classic | bright | inverse | big | glow
 sensitivity=1.00
 
 [seat1]
-color=000000          ; 000000 renders the black pointer scheme
+color=E86A33
+cursor=bright
 sensitivity=1.00
 
 [mouse]
@@ -203,7 +207,13 @@ sensitivity=1.00
 \\?\HID#VID_046D&PID_C534&MI_00#7&dde68fc&0&0000#{...}=1
 ```
 
-Any other `color` value tints the arrow body and keeps the dark outline. `sensitivity`
+Any other `color` value tints the arrow body and keeps the dark outline. `cursor` picks
+the set of pointers of that mouse; every set has all the shapes (arrow, hand, text bar,
+resize arrows, hourglass, forbidden), drawn from the system pointers in the mouse colour:
+`classic` (coloured body, black edge), `bright` (the same with a white rim, the default:
+it shows on light, dark, green or yellow backgrounds), `inverse` (white body, coloured
+edge, dark rim), `big` (one and a half times larger, bright rim) and `glow` (soft glow in
+the mouse colour). Colour and set are taken by the running engine at once. `sensitivity`
 is a per-seat pointer speed multiplier. Up to eight seats are supported; a
 new mouse adds one by itself.
 
@@ -458,8 +468,8 @@ same mitigation.
 - Seat counts above two are supported in code but only lightly tested on real hardware.
 - A new mouse that exposes several mouse collections can only be told from a ghost by its
   suffix; if the wrong one is seated, list the right interface in `[mouse]`.
-- The settings window covers speed, acceleration, screen and learned buttons; bindings and
-  colours are still edited in the file.
+- The settings window covers colour, pointer set, speed, acceleration, screen and learned
+  buttons; bindings are still edited in the file.
 
 ## Building
 

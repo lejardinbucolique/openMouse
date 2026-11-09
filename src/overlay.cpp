@@ -8,6 +8,7 @@
 #include "openmouse.h"
 #include <cwchar>
 #include <algorithm>
+#include <cmath>
 
 namespace om {
 namespace {
@@ -52,17 +53,69 @@ void EnsureClass(HINSTANCE inst) {
 
 } // namespace
 
-// Reads the real Windows arrow out of the system cursor and recolours it, so
-// each seat's pointer has the native silhouette, the native anti-aliasing and
-// the native hotspot instead of a hand-rasterised approximation.
-//
-// The tint maps luminance onto the seat colour: the white body of the arrow
-// becomes the seat colour and the black outline stays black, which keeps the
-// pointer legible on any background exactly as the stock cursor is.
-//
-// GetDIBits is used rather than DrawIconEx because GDI does not reliably carry
-// the alpha channel through a blit, and the alpha is the whole point here.
-bool CursorOverlay::RenderFromSystemCursor(COLORREF color, LPCWSTR id, std::vector<BYTE>& out) {
+// ---------------------------------------------------------------- cursor looks
+
+namespace {
+
+const wchar_t* const kStyleKeys[kStyleCount] = { L"classic", L"bright", L"inverse", L"big", L"glow" };
+
+// What a set adds to the system pointer, which stays the model of every shape.
+struct StyleSpec {
+    bool     whiteBody;   // body white and edge in the mouse colour, instead of the reverse
+    double   scale;
+    int      rim;         // hard outer rim, in pixels at scale 1 (0: none)
+    COLORREF rimColor;
+    int      glow;        // soft glow in the mouse colour, in pixels (0: none)
+};
+
+StyleSpec SpecOf(int style) {
+    switch (style) {
+    case kStyleBright:  return { false, 1.0, 2, RGB(255, 255, 255), 0 };
+    case kStyleInverse: return { true,  1.0, 2, RGB(20, 20, 20),    0 };
+    case kStyleBig:     return { false, 1.5, 2, RGB(255, 255, 255), 0 };
+    case kStyleGlow:    return { false, 1.0, 0, 0,                  5 };
+    default:            return { false, 1.0, 0, 0,                  0 };
+    }
+}
+
+// The model of a shape as two planes: lum is 255 on the body and 0 on the edge,
+// alpha is the coverage. Straight (not premultiplied) like the system cursor.
+struct Planes {
+    int w = 0, h = 0, hotX = 0, hotY = 0;
+    std::vector<BYTE> lum, alpha;
+};
+
+// A pointer drawn with a mask only (the text bar is one): one pixel of outline
+// is added so that a thin line still has an edge to set it off, and a body to colour.
+void AddOutline(Planes& p) {
+    const int nw = p.w + 2, nh = p.h + 2;
+    std::vector<BYTE> lum((size_t)nw * nh, 0), alpha((size_t)nw * nh, 0);
+    for (int y = 0; y < nh; ++y)
+        for (int x = 0; x < nw; ++x) {
+            const int sx = x - 1, sy = y - 1;
+            if (sx >= 0 && sy >= 0 && sx < p.w && sy < p.h && p.alpha[(size_t)sy * p.w + sx]) {
+                lum[(size_t)y * nw + x]   = p.lum[(size_t)sy * p.w + sx];
+                alpha[(size_t)y * nw + x] = 255;
+                continue;
+            }
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = sx + dx, ny = sy + dy;
+                    if (nx >= 0 && ny >= 0 && nx < p.w && ny < p.h && p.alpha[(size_t)ny * p.w + nx])
+                        alpha[(size_t)y * nw + x] = 255;
+                }
+        }
+    p.w = nw; p.h = nh; p.hotX += 1; p.hotY += 1;
+    p.lum.swap(lum); p.alpha.swap(alpha);
+}
+
+// Reads the real Windows pointer, so each shape has the native silhouette, the
+// native anti-aliasing and the native hotspot instead of a hand-rasterised
+// approximation. GetDIBits is used rather than DrawIconEx because GDI does not
+// reliably carry the alpha channel through a blit, and the alpha is the whole
+// point here. A pointer without alpha (colour with an AND mask, or monochrome
+// like the text bar) is rebuilt from its masks.
+bool PlanesFromSystemCursor(LPCWSTR id, Planes& out) {
     HCURSOR hc = (HCURSOR)LoadImageW(nullptr, id, IMAGE_CURSOR, 0, 0,
                                      LR_SHARED | LR_DEFAULTSIZE);
     if (!hc) return false;
@@ -76,104 +129,236 @@ bool CursorOverlay::RenderFromSystemCursor(COLORREF color, LPCWSTR id, std::vect
         ~BmpGuard() { if (a) DeleteObject(a); if (b) DeleteObject(b); }
     } guard{ ii.hbmMask, ii.hbmColor };
 
-    if (!ii.hbmColor) return false;      // classic monochrome cursor — fall back
-
+    // Monochrome: no colour bitmap, and the mask holds the AND plane over the XOR plane.
+    const bool mono = (ii.hbmColor == nullptr);
     BITMAP bm{};
-    if (!GetObjectW(ii.hbmColor, sizeof(bm), &bm)) return false;
-    if (bm.bmWidth <= 0 || bm.bmHeight <= 0 || bm.bmWidth > 256 || bm.bmHeight > 256)
-        return false;
+    if (!GetObjectW(mono ? ii.hbmMask : ii.hbmColor, sizeof(bm), &bm)) return false;
+    const int w = bm.bmWidth, h = mono ? bm.bmHeight / 2 : bm.bmHeight;
+    if (w <= 0 || h <= 0 || w > 256 || h > 256) return false;
 
-    const int w = bm.bmWidth, h = bm.bmHeight;
+    auto read = [&](HBITMAP hb, int rows, std::vector<BYTE>& px) {
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth       = w;
+        bi.bmiHeader.biHeight      = -rows;  // top-down
+        bi.bmiHeader.biPlanes      = 1;
+        bi.bmiHeader.biBitCount    = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        px.assign((size_t)w * rows * 4, 0);
+        HDC screen = GetDC(nullptr);
+        const int got = GetDIBits(screen, hb, 0, rows, px.data(), &bi, DIB_RGB_COLORS);
+        ReleaseDC(nullptr, screen);
+        return got == rows;
+    };
 
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth       = w;
-    bi.bmiHeader.biHeight      = -h;     // top-down
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    std::vector<BYTE> src((size_t)w * h * 4, 0);
-    HDC screen = GetDC(nullptr);
-    const int got = GetDIBits(screen, ii.hbmColor, 0, h, src.data(), &bi, DIB_RGB_COLORS);
-    ReleaseDC(nullptr, screen);
-    if (got != h) return false;
-
+    std::vector<BYTE> src;
     bool anyAlpha = false;
-    for (size_t i = 3; i < src.size(); i += 4)
-        if (src[i]) { anyAlpha = true; break; }
-    if (!anyAlpha) return false;         // no usable alpha — fall back
-
-    const BYTE r = GetRValue(color), g = GetGValue(color), b = GetBValue(color);
-    out.assign((size_t)w * h * 4, 0);
-
-    // Two special colours fall out of the luminance mapping naturally:
-    //   FFFFFF — white × luminance is the identity, i.e. the stock Windows
-    //            arrow, untinted.
-    //   000000 — would be an invisible black blob under the plain mapping, so
-    //            it instead inverts luminance: black body, white outline —
-    //            the Windows "black" pointer scheme.
-    const bool blackScheme = (color == RGB(0, 0, 0));
-
-    for (size_t i = 0; i < src.size(); i += 4) {
-        const BYTE sb = src[i], sg = src[i + 1], sr = src[i + 2], sa = src[i + 3];
-        if (!sa) continue;
-
-        // Rec. 601 luminance: 1.0 on the arrow's white body, 0.0 on its
-        // outline. Tinting by it recolours the body and leaves the edge dark.
-        int lum = (sr * 77 + sg * 150 + sb * 29) >> 8;
-
-        BYTE tr = r, tg = g, tb = b;
-        if (blackScheme) { lum = 255 - lum; tr = tg = tb = 255; }
-
-        // Store premultiplied BGRA, which is what UpdateLayeredWindow wants.
-        out[i]     = (BYTE)((tb * lum / 255) * sa / 255);
-        out[i + 1] = (BYTE)((tg * lum / 255) * sa / 255);
-        out[i + 2] = (BYTE)((tr * lum / 255) * sa / 255);
-        out[i + 3] = sa;
+    if (!mono) {
+        if (!read(ii.hbmColor, h, src)) return false;
+        for (size_t i = 3; i < src.size(); i += 4)
+            if (src[i]) { anyAlpha = true; break; }
     }
 
-    w_    = w;
-    h_    = h;
-    hotX_ = (int)ii.xHotspot;
-    hotY_ = (int)ii.yHotspot;
+    out.w = w; out.h = h;
+    out.hotX = (int)ii.xHotspot;
+    out.hotY = (int)ii.yHotspot;
+    out.lum.assign((size_t)w * h, 0);
+    out.alpha.assign((size_t)w * h, 0);
+
+    if (anyAlpha) {
+        for (size_t i = 0; i < (size_t)w * h; ++i) {
+            const BYTE sb = src[i * 4], sg = src[i * 4 + 1], sr = src[i * 4 + 2];
+            // Rec. 601 luminance: 1.0 on the arrow's white body, 0.0 on its outline.
+            out.lum[i]   = (BYTE)((sr * 77 + sg * 150 + sb * 29) >> 8);
+            out.alpha[i] = src[i * 4 + 3];
+        }
+        return true;
+    }
+
+    std::vector<BYTE> mask;
+    if (!read(ii.hbmMask, mono ? 2 * h : h, mask)) return false;
+    bool any = false;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const size_t i = (size_t)y * w + x;
+            const bool andBit = mask[i * 4] > 127;
+            if (mono) {
+                const bool xorBit = mask[((size_t)(y + h) * w + x) * 4] > 127;
+                if (andBit && !xorBit) continue;               // transparent
+                out.lum[i] = xorBit ? 255 : 0;                 // white or inverting: body; black: edge
+            } else {
+                if (andBit) continue;
+                const BYTE sb = src[i * 4], sg = src[i * 4 + 1], sr = src[i * 4 + 2];
+                out.lum[i] = (BYTE)((sr * 77 + sg * 150 + sb * 29) >> 8);
+            }
+            out.alpha[i] = 255;
+            any = true;
+        }
+    if (!any) return false;
+    if (mono) AddOutline(out);
     return true;
 }
 
-void CursorOverlay::RenderFallbackArrow(COLORREF color, std::vector<BYTE>& out) {
-    w_ = kBmpW;
-    h_ = kBmpH;
-    hotX_ = 1;
-    hotY_ = 1;
-    out.assign((size_t)w_ * h_ * 4, 0);
-
-    const BYTE r = GetRValue(color), g = GetGValue(color), b = GetBValue(color);
-
-    std::vector<bool> inside((size_t)w_ * h_, false);
-    for (int y = 0; y < h_; ++y)
-        for (int x = 0; x < w_; ++x)
-            inside[(size_t)y * w_ + x] = InsideArrow(x + 0.5, y + 0.5);
-
-    for (int y = 0; y < h_; ++y) {
-        for (int x = 0; x < w_; ++x) {
-            BYTE* p = out.data() + ((size_t)y * w_ + x) * 4;
-            if (!inside[(size_t)y * w_ + x]) continue;
-
+// The hand-drawn arrow, for a machine where the system cursor cannot be read
+// back with usable alpha.
+void PlanesFromPolygon(Planes& out) {
+    out.w = kBmpW; out.h = kBmpH; out.hotX = 1; out.hotY = 1;
+    out.lum.assign((size_t)out.w * out.h, 0);
+    out.alpha.assign((size_t)out.w * out.h, 0);
+    std::vector<bool> inside((size_t)out.w * out.h, false);
+    for (int y = 0; y < out.h; ++y)
+        for (int x = 0; x < out.w; ++x)
+            inside[(size_t)y * out.w + x] = InsideArrow(x + 0.5, y + 0.5);
+    for (int y = 0; y < out.h; ++y)
+        for (int x = 0; x < out.w; ++x) {
+            if (!inside[(size_t)y * out.w + x]) continue;
             bool edge = false;
             for (int dy = -1; dy <= 1 && !edge; ++dy)
                 for (int dx = -1; dx <= 1 && !edge; ++dx) {
                     const int nx = x + dx, ny = y + dy;
-                    if (nx < 0 || ny < 0 || nx >= w_ || ny >= h_ ||
-                        !inside[(size_t)ny * w_ + nx])
+                    if (nx < 0 || ny < 0 || nx >= out.w || ny >= out.h ||
+                        !inside[(size_t)ny * out.w + nx])
                         edge = true;
                 }
-            if (edge) { p[0] = 20; p[1] = 20; p[2] = 20; p[3] = 255; }
-            else      { p[0] = b;  p[1] = g;  p[2] = r;  p[3] = 255; }
+            out.alpha[(size_t)y * out.w + x] = 255;
+            out.lum[(size_t)y * out.w + x]   = edge ? 0 : 255;
         }
+}
+
+LPCWSTR SystemCursorId(PointerShape shape) {
+    switch (shape) {
+    case PointerShape::SizeWE:      return IDC_SIZEWE;
+    case PointerShape::SizeNS:      return IDC_SIZENS;
+    case PointerShape::SizeNWSE:    return IDC_SIZENWSE;
+    case PointerShape::SizeNESW:    return IDC_SIZENESW;
+    case PointerShape::Hand:        return IDC_HAND;
+    case PointerShape::IBeam:       return IDC_IBEAM;
+    case PointerShape::No:          return IDC_NO;
+    case PointerShape::Wait:        return IDC_WAIT;
+    case PointerShape::AppStarting: return IDC_APPSTARTING;
+    case PointerShape::Cross:       return IDC_CROSS;
+    case PointerShape::SizeAll:     return IDC_SIZEALL;
+    default:                        return IDC_ARROW;
     }
 }
 
-bool CursorOverlay::Create(HINSTANCE inst, int seatIndex, COLORREF color) {
+// Bilinear enlargement of one plane. The hotspot is scaled by the caller.
+std::vector<BYTE> Enlarge(const std::vector<BYTE>& p, int w, int h, int nw, int nh) {
+    std::vector<BYTE> o((size_t)nw * nh);
+    for (int y = 0; y < nh; ++y) {
+        const double fy = (y + 0.5) * h / nh - 0.5;
+        int y0 = (int)std::floor(fy);
+        const double ty = fy - y0;
+        const int y1 = std::min(std::max(y0 + 1, 0), h - 1);
+        y0 = std::min(std::max(y0, 0), h - 1);
+        for (int x = 0; x < nw; ++x) {
+            const double fx = (x + 0.5) * w / nw - 0.5;
+            int x0 = (int)std::floor(fx);
+            const double tx = fx - x0;
+            const int x1 = std::min(std::max(x0 + 1, 0), w - 1);
+            x0 = std::min(std::max(x0, 0), w - 1);
+            const double top = p[(size_t)y0 * w + x0] * (1 - tx) + p[(size_t)y0 * w + x1] * tx;
+            const double bot = p[(size_t)y1 * w + x0] * (1 - tx) + p[(size_t)y1 * w + x1] * tx;
+            o[(size_t)y * nw + x] = (BYTE)std::lround(top * (1 - ty) + bot * ty);
+        }
+    }
+    return o;
+}
+
+} // namespace
+
+const wchar_t* CursorStyleKey(int style) {
+    return kStyleKeys[style < 0 || style >= kStyleCount ? kStyleBright : style];
+}
+
+int CursorStyleFromKey(const std::wstring& key, int fallback) {
+    for (int i = 0; i < kStyleCount; ++i)
+        if (_wcsicmp(key.c_str(), kStyleKeys[i]) == 0) return i;
+    return fallback;
+}
+
+// Draws one shape of a set. The model is the system pointer (lum + alpha); the
+// body is the mouse colour, the edge black, then the set adds its rim or glow
+// outside the silhouette so the pointer shows on any background.
+bool RenderPointer(PointerShape shape, COLORREF color, int style, PointerImage& out) {
+    Planes m;
+    if (!PlanesFromSystemCursor(SystemCursorId(shape), m)) {
+        if (shape != PointerShape::Arrow) return false;
+        PlanesFromPolygon(m);
+    }
+    const StyleSpec sp = SpecOf(style);
+
+    if (sp.scale != 1.0) {
+        const int nw = (int)std::lround(m.w * sp.scale), nh = (int)std::lround(m.h * sp.scale);
+        m.lum   = Enlarge(m.lum,   m.w, m.h, nw, nh);
+        m.alpha = Enlarge(m.alpha, m.w, m.h, nw, nh);
+        m.hotX = (int)std::lround(m.hotX * sp.scale);
+        m.hotY = (int)std::lround(m.hotY * sp.scale);
+        m.w = nw; m.h = nh;
+    }
+
+    const int rim  = sp.rim ? (int)std::lround(sp.rim * sp.scale) : 0;
+    const int halo = std::max(rim, sp.glow);       // how far outside the silhouette we draw
+    const int pad  = halo ? halo + 1 : 0;
+    const int W = m.w + 2 * pad, H = m.h + 2 * pad;
+
+    // Black as a colour inverts the roles (black body, white edge), as the
+    // Windows "black" scheme does; white is the stock arrow.
+    const COLORREF bodyC = sp.whiteBody ? RGB(255, 255, 255) : color;
+    COLORREF edgeC = sp.whiteBody ? color : RGB(0, 0, 0);
+    if (!sp.whiteBody && color == RGB(0, 0, 0)) edgeC = RGB(255, 255, 255);
+    const COLORREF haloC = sp.glow ? color : sp.rimColor;
+
+    out.w = W; out.h = H;
+    out.hotX = m.hotX + pad;
+    out.hotY = m.hotY + pad;
+    out.bgra.assign((size_t)W * H * 4, 0);
+
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const int sx = x - pad, sy = y - pad;
+            int sa = 0, lum = 0;
+            if (sx >= 0 && sy >= 0 && sx < m.w && sy < m.h) {
+                sa  = m.alpha[(size_t)sy * m.w + sx];
+                lum = m.lum[(size_t)sy * m.w + sx];
+            }
+
+            // Outer rim or glow: the strongest neighbouring coverage, weighted by distance.
+            double ha = 0;
+            if (halo && sa < 255) {
+                for (int dy = -halo - 1; dy <= halo + 1; ++dy) {
+                    const int ny = sy + dy;
+                    if (ny < 0 || ny >= m.h) continue;
+                    for (int dx = -halo - 1; dx <= halo + 1; ++dx) {
+                        const int nx = sx + dx;
+                        if (nx < 0 || nx >= m.w) continue;
+                        const int na = m.alpha[(size_t)ny * m.w + nx];
+                        if (!na) continue;
+                        const double d = std::sqrt((double)(dx * dx + dy * dy));
+                        double f;
+                        if (sp.glow) { f = 1.0 - d / (sp.glow + 1); f = f > 0 ? f * f * 0.9 : 0; }
+                        else         { f = rim + 0.5 - d; f = f < 0 ? 0 : (f > 1 ? 1 : f); }
+                        ha = std::max(ha, f * na / 255.0);
+                    }
+                }
+            }
+
+            BYTE* p = out.bgra.data() + ((size_t)y * W + x) * 4;
+            // Shape colour: edge to body by luminance; premultiplied by coverage.
+            const int r = (GetRValue(edgeC) * (255 - lum) + GetRValue(bodyC) * lum) / 255;
+            const int g = (GetGValue(edgeC) * (255 - lum) + GetGValue(bodyC) * lum) / 255;
+            const int b = (GetBValue(edgeC) * (255 - lum) + GetBValue(bodyC) * lum) / 255;
+            const double under = ha * (255 - sa) / 255.0;    // halo showing through the shape's transparency
+            p[0] = (BYTE)std::lround(b * sa / 255.0 + GetBValue(haloC) * under);
+            p[1] = (BYTE)std::lround(g * sa / 255.0 + GetGValue(haloC) * under);
+            p[2] = (BYTE)std::lround(r * sa / 255.0 + GetRValue(haloC) * under);
+            p[3] = (BYTE)std::lround(sa + 255.0 * under);
+        }
+    }
+    return true;
+}
+
+bool CursorOverlay::Create(HINSTANCE inst, int seatIndex, COLORREF color, int style) {
     EnsureClass(inst);
     w_ = kBmpW;
     h_ = kBmpH;
@@ -191,30 +376,23 @@ bool CursorOverlay::Create(HINSTANCE inst, int seatIndex, COLORREF color) {
         nullptr, nullptr, inst, nullptr);
     if (!hwnd_) return false;
 
-    Render(color);
+    color_ = color;
+    style_ = style;
+    Present(PointerShape::Arrow);
     return true;
 }
 
-static LPCWSTR ShapeCursorId(PointerShape shape) {
-    switch (shape) {
-    case PointerShape::SizeWE:   return IDC_SIZEWE;
-    case PointerShape::SizeNS:   return IDC_SIZENS;
-    case PointerShape::SizeNWSE: return IDC_SIZENWSE;
-    case PointerShape::SizeNESW: return IDC_SIZENESW;
-    case PointerShape::Hand:        return IDC_HAND;
-    case PointerShape::IBeam:       return IDC_IBEAM;
-    case PointerShape::No:          return IDC_NO;
-    case PointerShape::Wait:        return IDC_WAIT;
-    case PointerShape::AppStarting: return IDC_APPSTARTING;
-    case PointerShape::Cross:       return IDC_CROSS;
-    case PointerShape::SizeAll:     return IDC_SIZEALL;
-    default:                     return IDC_ARROW;
-    }
-}
-
-void CursorOverlay::Render(COLORREF color) {
+void CursorOverlay::SetLook(COLORREF color, int style) {
+    if (color == color_ && style == style_) return;
     color_ = color;
-    Present(PointerShape::Arrow);
+    style_ = style;
+    if (!hwnd_) return;
+    // Every shape is drawn again, on demand: forget the ones in the cache.
+    bitmap_ = nullptr;
+    for (ShapeBmp& sb : shapes_) { if (sb.bmp) DeleteObject(sb.bmp); sb = ShapeBmp(); }
+    const PointerShape was = shape_;
+    shape_ = PointerShape::Count;       // so that the redraw is not skipped
+    Present(was);
 }
 
 // Builds (once) and shows the bitmap of a shape. Every shape comes from the
@@ -224,25 +402,18 @@ void CursorOverlay::Render(COLORREF color) {
 void CursorOverlay::Present(PointerShape shape) {
     ShapeBmp* sb = &shapes_[(int)shape];
     if (!sb->bmp) {
-        // Prefer the real system cursor; the hand-drawn polygon is only a
-        // fallback for the arrow, on machines where the cursor cannot be read
-        // back with usable alpha.
-        std::vector<BYTE> pixels;
-        bool ok = RenderFromSystemCursor(color_, ShapeCursorId(shape), pixels);
-        if (!ok && shape == PointerShape::Arrow) {
-            RenderFallbackArrow(color_, pixels);
-            ok = true;
-        }
-        if (!ok || w_ <= 0 || h_ <= 0 || pixels.size() != (size_t)w_ * h_ * 4) {
-            // No usable resize cursor: stay on the arrow rather than show nothing.
+        PointerImage img;
+        if (!RenderPointer(shape, color_, style_, img) || img.w <= 0 || img.h <= 0 ||
+            img.bgra.size() != (size_t)img.w * img.h * 4) {
+            // No usable cursor: stay on the arrow rather than show nothing.
             if (shape != PointerShape::Arrow) Present(PointerShape::Arrow);
             return;
         }
 
         BITMAPINFO bi{};
         bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-        bi.bmiHeader.biWidth       = w_;
-        bi.bmiHeader.biHeight      = -h_;          // top-down
+        bi.bmiHeader.biWidth       = img.w;
+        bi.bmiHeader.biHeight      = -img.h;       // top-down
         bi.bmiHeader.biPlanes      = 1;
         bi.bmiHeader.biBitCount    = 32;
         bi.bmiHeader.biCompression = BI_RGB;
@@ -256,8 +427,8 @@ void CursorOverlay::Present(PointerShape shape) {
             if (shape != PointerShape::Arrow) Present(PointerShape::Arrow);
             return;
         }
-        memcpy(bits, pixels.data(), pixels.size());
-        sb->bmp = bmp; sb->w = w_; sb->h = h_; sb->hotX = hotX_; sb->hotY = hotY_;
+        memcpy(bits, img.bgra.data(), img.bgra.size());
+        sb->bmp = bmp; sb->w = img.w; sb->h = img.h; sb->hotX = img.hotX; sb->hotY = img.hotY;
     }
 
     w_ = sb->w; h_ = sb->h; hotX_ = sb->hotX; hotY_ = sb->hotY;

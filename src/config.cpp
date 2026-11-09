@@ -172,6 +172,7 @@ void Config::EnsureSeatSlots(int n) {
     if ((int)sensitivity.size() < n) sensitivity.resize(n, 1.0);
     if ((int)accel.size()       < n) accel.resize(n);
     if ((int)screen.size()      < n) screen.resize(n);
+    if ((int)cursorStyle.size() < n) cursorStyle.resize(n, (int)kStyleBright);
     while ((int)seatColors.size() < n) {
         seatColors.push_back(RGB(200, 200, 200));
         seatColors.back() = PickSeatColor((int)seatColors.size() - 1);
@@ -224,6 +225,10 @@ bool Config::Load(const std::wstring& path) {
                 else if (key == L"accel_fast")  { accel[idx].on = true; accel[idx].fast  = _wtof(val.c_str()); }
                 else if (key == L"accel_speed") { accel[idx].on = true; accel[idx].speed = _wtof(val.c_str()); }
                 else if (key == L"screen") screen[idx] = val;
+                else if (key == L"cursor") {
+                    if ((int)cursorStyle.size() <= idx) cursorStyle.resize(idx + 1, (int)kStyleBright);
+                    cursorStyle[idx] = CursorStyleFromKey(val, (int)kStyleBright);
+                }
                 else if (key == L"button") {
                     // sig|action|mods:vk|label  (the label may be missing)
                     std::vector<std::wstring> f;
@@ -288,6 +293,10 @@ bool Config::Save(const std::wstring& path) const {
             swprintf(buf, 128, L"accel_slow=%.2f\naccel_fast=%.2f\naccel_speed=%.2f\n\n",
                      accel[i].slow, accel[i].fast, accel[i].speed);
             t += buf;
+        }
+        if (i < (int)cursorStyle.size()) {
+            t.resize(t.size() - 1);
+            t += L"cursor=" + std::wstring(CursorStyleKey(cursorStyle[i])) + L"\n\n";
         }
         if (i < (int)screen.size() && !screen[i].empty()) {
             t.resize(t.size() - 1);

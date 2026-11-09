@@ -1598,6 +1598,10 @@ void WatchdogThread() {
 
 // ---------------------------------------------------------------- binding
 
+int SeatCursorStyle(int i) {
+    return i < (int)g_cfg.cursorStyle.size() ? g_cfg.cursorStyle[i] : (int)kStyleBright;
+}
+
 // A seat's pointer: its state, its overlay and the place it starts from.
 void InitSeat(int i, POINT at) {
     g_seats[i]       = Seat{};
@@ -1617,7 +1621,7 @@ void InitSeat(int i, POINT at) {
     // cursor and SetActiveSeat asks for that overlay. Creating it only for
     // i != 0 made seat 0's pointer vanish permanently on the first
     // handover.
-    g_overlayOk[i] = g_overlay[i].Create(g_inst, i, c);
+    g_overlayOk[i] = g_overlay[i].Create(g_inst, i, c, SeatCursorStyle(i));
     g_overlay[i].MoveTo(g_seats[i].pos);
     g_seatReady[i] = true;
     LogLine(L"[seat %d] colour %02X%02X%02X  overlay %s", i,
@@ -1987,8 +1991,8 @@ void Rescan() {
 void TrayMenu(HWND hwnd);   // defined with the other tray plumbing below
 
 // The settings window has written new seat values: take the speed ones at
-// once. Only sensitivity and acceleration are live; the rest of the file
-// (bindings, colours, seat count) still needs a restart.
+// once. Speed, buttons, colours and pointer sets are live; the rest of the file
+// (bindings, seat count) still needs a restart.
 void ReclampSeats() {
     for (int i = 0; i < g_cfg.seatCount && i < kMaxSeats; ++i) {
         const POINT before = g_seats[i].pos;
@@ -2011,6 +2015,13 @@ void ReloadSettings() {
     const bool padChanged = g_cfg.touchpad != fresh.touchpad;
     g_cfg.touchpad    = fresh.touchpad;
     g_cfg.screen      = fresh.screen;
+    // Colour and set of pointers: redrawn at once.
+    g_cfg.cursorStyle = fresh.cursorStyle;
+    for (int i = 0; i < g_cfg.seatCount && i < kMaxSeats; ++i) {
+        if (i < (int)fresh.seatColors.size()) g_cfg.seatColors[i] = fresh.seatColors[i];
+        if (g_seatReady[i])
+            g_overlay[i].SetLook(g_cfg.seatColors[i], SeatCursorStyle(i));
+    }
     // Learned buttons: end what the old table holds down, then swap.
     ReleaseHeldButtons();
     g_cfg.buttons     = fresh.buttons;

@@ -38,6 +38,7 @@ namespace {
 
 constexpr wchar_t kSettingsClass[] = L"openMouse.Settings";
 constexpr wchar_t kPanelClass[]    = L"openMouse.Settings.Panel";
+constexpr wchar_t kPreviewClass[]  = L"openMouse.Settings.Preview";
 constexpr wchar_t kEngineClass[]   = L"openMouse.Engine";
 
 // ---------------------------------------------------------------- strings
@@ -49,7 +50,10 @@ enum Str {
     sNoButtons, sNative, sActNone, sActLeft, sActRight, sActMiddle, sActBack, sActForward, sActKeys,
     sKeysNone, sKeysCapture, sWin, sCtrlName, sAltName, sShiftName, sWinName,
     sGeneral, sAutostart, sAutostartOn, sAutostartOff, sAutostartWait, sAutostartFail,
-    sAutostartDenied, sStrCount
+    sAutostartDenied,
+    sLook, sColorLabel, sStyleLabel, sColorCustom,
+    sStyle0, sStyle1, sStyle2, sStyle3, sStyle4,
+    sCol0, sCol1, sCol2, sCol3, sCol4, sCol5, sCol6, sCol7, sCol8, sCol9, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -105,6 +109,16 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Waiting for Windows to confirm…",
     L"Windows did not take the change. Run openMouse as administrator and try again.",
     L"Cancelled: administrator permission was refused, nothing changed.",
+    L"Pointer look",
+    L"Colour",
+    L"Pointer set",
+    L"Custom (%06X)",
+    L"Classic (coloured body, black edge)",
+    L"Bright rim (seen on any background)",
+    L"White body, coloured edge",
+    L"Large, bright rim",
+    L"Soft glow",
+    L"Yellow", L"Orange", L"Red", L"Pink", L"Purple", L"Blue", L"Cyan", L"Green", L"Lime", L"White",
 };
 
 const wchar_t* const kStrFr[sStrCount] = {
@@ -160,6 +174,23 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"En attente de la confirmation de Windows…",
     L"Windows n'a pas pris le changement. Lancez openMouse en administrateur et recommencez.",
     L"Annulé : l'autorisation administrateur a été refusée, rien n'a changé.",
+    L"Apparence de la flèche",
+    L"Couleur",
+    L"Jeu de curseurs",
+    L"Personnalisée (%06X)",
+    L"Classique (corps coloré, bord noir)",
+    L"Liseré brillant (visible sur tous les fonds)",
+    L"Corps blanc, bord coloré",
+    L"Grand, liseré brillant",
+    L"Halo lumineux",
+    L"Jaune", L"Orange", L"Rouge", L"Rose", L"Violet", L"Bleu", L"Cyan", L"Vert", L"Citron vert", L"Blanc",
+};
+
+// The colours offered for a mouse; the first one is the default of seat 0.
+const COLORREF kColors[10] = {
+    RGB(0xFF, 0xDD, 0x00), RGB(0xE8, 0x6A, 0x33), RGB(0xE0, 0x3C, 0x3C), RGB(0xF0, 0x6E, 0xAA),
+    RGB(0xB0, 0x60, 0xC0), RGB(0x4A, 0x90, 0xD9), RGB(0x20, 0xC0, 0xD0), RGB(0x5C, 0xB8, 0x5C),
+    RGB(0xB8, 0xD8, 0x2A), RGB(0xFF, 0xFF, 0xFF),
 };
 
 const wchar_t* S(Str id) { return (UiFrench() ? kStrFr : kStrEn)[id]; }
@@ -185,7 +216,8 @@ constexpr int kIdUndo    = 900;
 constexpr int kIdClose   = 901;
 constexpr int kIdAutostart = 902;
 enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
-               cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget };
+               cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget,
+               cColorLabel = 23, cColor, cStyleLabel, cStyle, cPreview };
 int CtlId(int seat, int ctl) { return kIdBase + seat * kPerSeat + ctl; }
 
 constexpr UINT_PTR kTimerApply = 1, kTimerLearn = 2, kTimerAutostart = 3;
@@ -198,6 +230,7 @@ struct SeatUi {
     HWND accel = nullptr, screenLabel = nullptr, screen = nullptr, defaults = nullptr;
     HWND learn = nullptr, note = nullptr, list = nullptr, action = nullptr, keys = nullptr,
          win = nullptr, forget = nullptr;
+    HWND colorLabel = nullptr, color = nullptr, styleLabel = nullptr, style = nullptr, preview = nullptr;
     RECT header{};   // swatch and title, painted by the panel (content coordinates)
 };
 
@@ -268,6 +301,7 @@ void EnsureSeats(Config& c, int n) {
     if ((int)c.accel.size()       < n) c.accel.resize(n);
     if ((int)c.screen.size()      < n) c.screen.resize(n);
     if ((int)c.seatColors.size()  < n) c.seatColors.resize(n, RGB(200, 200, 200));
+    if ((int)c.cursorStyle.size() < n) c.cursorStyle.resize(n, (int)kStyleBright);
 }
 
 std::wstring Format(Field f, double v) {
@@ -292,6 +326,8 @@ void Apply() {
         disk.sensitivity[i] = g.cur.sensitivity[i];
         disk.accel[i]       = g.cur.accel[i];
         disk.screen[i]      = g.cur.screen[i];
+        disk.seatColors[i]  = g.cur.seatColors[i];
+        disk.cursorStyle[i] = g.cur.cursorStyle[i];
         disk.buttons[i]     = g.cur.buttons[i];
     }
     if (!disk.Save(g.path)) {
@@ -635,6 +671,47 @@ LRESULT CALLBACK KeysProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, D
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
+// ---------------------------------------------------------------- look
+
+// The two choices that make a pointer recognisable: its colour and its set of
+// shapes, with a preview of the set on the backgrounds that hide pointers most.
+void ShowLook(int seat) {
+    SeatUi& u = g.ui[seat];
+    const COLORREF cur = g.cur.seatColors[seat];
+    SendMessageW(u.style, CB_SETCURSEL, g.cur.cursorStyle[seat], 0);
+    SendMessageW(u.color, CB_RESETCONTENT, 0, 0);
+    int sel = -1;
+    for (int k = 0; k < 10; ++k) {
+        SendMessageW(u.color, CB_ADDSTRING, 0, (LPARAM)S((Str)(sCol0 + k)));
+        if (kColors[k] == cur) sel = k;
+    }
+    if (sel < 0) {      // a colour typed in the ini: kept, and shown
+        wchar_t buf[64];
+        swprintf(buf, 64, S(sColorCustom), (GetRValue(cur) << 16) | (GetGValue(cur) << 8) | GetBValue(cur));
+        SendMessageW(u.color, CB_ADDSTRING, 0, (LPARAM)buf);
+        sel = 10;
+    }
+    SendMessageW(u.color, CB_SETCURSEL, sel, 0);
+    InvalidateRect(u.preview, nullptr, FALSE);
+}
+
+void OnColor(int seat) {
+    const int sel = (int)SendMessageW(g.ui[seat].color, CB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel >= 10) return;          // the custom entry, unchanged
+    g.cur.seatColors[seat] = kColors[sel];
+    ShowLook(seat);
+    InvalidateRect(g.panel, nullptr, FALSE);   // the swatch in the header
+    Apply();
+}
+
+void OnStyle(int seat) {
+    const int sel = (int)SendMessageW(g.ui[seat].style, CB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel >= kStyleCount) return;
+    g.cur.cursorStyle[seat] = sel;
+    ShowLook(seat);
+    Apply();
+}
+
 // ---------------------------------------------------------------- controls
 
 void ShowSeat(int seat) {
@@ -679,6 +756,7 @@ void ShowSeat(int seat) {
     }
     SendMessageW(u.screen, CB_SETCURSEL, sel, 0);
 
+    ShowLook(seat);
     ShowButtons(seat);
 }
 
@@ -706,6 +784,13 @@ void CreateControls(HWND hwnd) {
     HWND p = g.panel;
     for (int i = 0; i < g.seats; ++i) {
         SeatUi& u = g.ui[i];
+        u.colorLabel = Make(p, L"STATIC", S(sColorLabel), SS_LEFT, CtlId(i, cColorLabel));
+        u.color = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cColor));
+        u.styleLabel = Make(p, L"STATIC", S(sStyleLabel), SS_LEFT, CtlId(i, cStyleLabel));
+        u.style = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cStyle));
+        for (int k = 0; k < kStyleCount; ++k)
+            SendMessageW(u.style, CB_ADDSTRING, 0, (LPARAM)S((Str)(sStyle0 + k)));
+        u.preview = Make(p, kPreviewClass, L"", 0, CtlId(i, cPreview));
         for (int f = 0; f < fFieldCount; ++f) {
             if (f == fSlow)   // the checkbox sits between sensitivity and the accel sliders
                 u.accel = Make(p, L"BUTTON", S(sAccel), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cAccel));
@@ -794,6 +879,16 @@ int LayoutSeat(int i, int x, int y) {
     };
     u.header = { x, y, x + colW, y + Px(24) };
     y += Px(34);
+    place(u.colorLabel, x, y, colW, Px(18));
+    y += Px(20);
+    place(u.color, x, y, colW, Px(200));
+    y += Px(32);
+    place(u.styleLabel, x, y, colW, Px(18));
+    y += Px(20);
+    place(u.style, x, y, colW, Px(200));
+    y += Px(32);
+    place(u.preview, x, y, colW, Px(112));
+    y += Px(112) + Px(20);
     for (int f = 0; f < fFieldCount; ++f) {
         if (f == fSlow) { place(u.accel, x, y, colW, Px(22)); y += Px(30); }
         place(u.label[f], x, y, colW - Px(64), Px(18));
@@ -946,6 +1041,93 @@ void PaintPanel(HWND hwnd) {
     EndPaint(hwnd, &ps);
 }
 
+// The preview of a seat: the arrow on four backgrounds that hide pointers (white,
+// dark, green, yellow) and four other shapes of the same set underneath.
+struct PreviewCache {
+    COLORREF color = 0;
+    int      style = -1;
+    PointerImage img[5];     // arrow, hand, text bar, resize, forbidden
+    bool     ok[5] = {};
+} g_preview[kMaxSeats];
+
+void PaintPreview(HWND hwnd) {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(hwnd, &ps);
+    int seat = 0, ctl = 0;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    const int W = rc.right, H = rc.bottom;
+    if (SeatOf(GetDlgCtrlID(hwnd), seat, ctl) && W > 0 && H > 0) {
+        static const PointerShape kShapes[5] = { PointerShape::Arrow, PointerShape::Hand,
+            PointerShape::IBeam, PointerShape::SizeNWSE, PointerShape::No };
+        static const int kRow[2][4] = { { 0, 0, 0, 0 }, { 1, 2, 3, 4 } };
+        static const COLORREF kBack[4] = { RGB(255, 255, 255), RGB(32, 32, 36),
+                                           RGB(60, 170, 70),   RGB(250, 230, 60) };
+        PreviewCache& pc = g_preview[seat];
+        const COLORREF color = g.cur.seatColors[seat];
+        const int style = g.cur.cursorStyle[seat];
+        if (pc.style != style || pc.color != color) {
+            pc.style = style; pc.color = color;
+            for (int k = 0; k < 5; ++k) pc.ok[k] = RenderPointer(kShapes[k], color, style, pc.img[k]);
+        }
+
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth       = W;
+        bi.bmiHeader.biHeight      = -H;
+        bi.bmiHeader.biPlanes      = 1;
+        bi.bmiHeader.biBitCount    = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HBITMAP dib = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (dib && bits) {
+            BYTE* px = (BYTE*)bits;
+            for (int row = 0; row < 2; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    const int x0 = W * col / 4, x1 = W * (col + 1) / 4;
+                    const int y0 = H * row / 2, y1 = H * (row + 1) / 2;
+                    const COLORREF back = kBack[col];
+                    for (int y = y0; y < y1; ++y)
+                        for (int x = x0; x < x1; ++x) {
+                            BYTE* d = px + ((size_t)y * W + x) * 4;
+                            d[0] = GetBValue(back); d[1] = GetGValue(back); d[2] = GetRValue(back); d[3] = 255;
+                        }
+                    const int k = kRow[row][col];
+                    if (!pc.ok[k]) continue;
+                    const PointerImage& im = pc.img[k];
+                    const int ox = (x0 + x1 - im.w) / 2, oy = (y0 + y1 - im.h) / 2;
+                    for (int y = 0; y < im.h; ++y) {
+                        const int dy = oy + y;
+                        if (dy < y0 || dy >= y1) continue;
+                        for (int x = 0; x < im.w; ++x) {
+                            const int dx = ox + x;
+                            if (dx < x0 || dx >= x1) continue;
+                            const BYTE* sp = im.bgra.data() + ((size_t)y * im.w + x) * 4;
+                            BYTE* d = px + ((size_t)dy * W + dx) * 4;
+                            const int inv = 255 - sp[3];       // premultiplied source over
+                            for (int c = 0; c < 3; ++c) d[c] = (BYTE)(sp[c] + d[c] * inv / 255);
+                        }
+                    }
+                }
+            }
+            HDC mem = CreateCompatibleDC(dc);
+            HGDIOBJ old = SelectObject(mem, dib);
+            BitBlt(dc, 0, 0, W, H, mem, 0, 0, SRCCOPY);
+            SelectObject(mem, old);
+            DeleteDC(mem);
+        }
+        if (dib) DeleteObject(dib);
+        FrameRect(dc, &rc, GetSysColorBrush(COLOR_GRAYTEXT));
+    }
+    EndPaint(hwnd, &ps);
+}
+
+LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_PAINT) { PaintPreview(hwnd); return 0; }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 // The panel only hosts the controls: it hands their notifications to the
 // window, scrolls, and paints the seat headers.
 LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -997,6 +1179,8 @@ void OnCommand(HWND hwnd, int id) {
             g.cur.sensitivity[i] = g.opened.sensitivity[i];
             g.cur.accel[i]       = g.opened.accel[i];
             g.cur.screen[i]      = g.opened.screen[i];
+            g.cur.seatColors[i]  = g.opened.seatColors[i];
+            g.cur.cursorStyle[i] = g.opened.cursorStyle[i];
             g.cur.buttons[i]     = g.opened.buttons[i];
             g.sel[i] = 0;
             g.note[i].clear();
@@ -1015,6 +1199,7 @@ void OnCommand(HWND hwnd, int id) {
         g.cur.sensitivity[seat] = 1.0;
         g.cur.accel[seat]       = Config::Accel{};
         g.cur.screen[seat].clear();
+        g.cur.cursorStyle[seat] = (int)kStyleBright;
         ShowSeat(seat);
         Apply();
     } else if (ctl == cLearn) {
@@ -1041,6 +1226,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int seat, ctl;
             if (SeatOf(LOWORD(wp), seat, ctl)) {
                 if (ctl == cScreen)      OnScreen(seat);
+                else if (ctl == cColor)  OnColor(seat);
+                else if (ctl == cStyle)  OnStyle(seat);
                 else if (ctl == cList)   OnListSelect(seat);
                 else if (ctl == cAction) OnActionSelect(seat);
             }
@@ -1137,6 +1324,14 @@ int RunSettings(HINSTANCE inst) {
     pc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
     pc.lpszClassName = kPanelClass;
     RegisterClassExW(&pc);
+
+    WNDCLASSEXW vc{};
+    vc.cbSize        = sizeof(vc);
+    vc.lpfnWndProc   = PreviewProc;
+    vc.hInstance     = inst;
+    vc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    vc.lpszClassName = kPreviewClass;
+    RegisterClassExW(&vc);
 
     // Not resizable, never topmost: it must not stand in the way of anything.
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
