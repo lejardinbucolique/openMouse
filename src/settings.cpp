@@ -12,6 +12,10 @@
 // The file is re-read before each write, so device bindings the engine may
 // have saved in the meantime are kept. "Undo" puts back the values the window
 // opened with.
+//
+// The sections of the mice sit in a panel of their own that scrolls: with a
+// button section on top of the speed ones they no longer fit a small screen.
+// The panel only hosts the controls and forwards their notifications.
 #include "openmouse.h"
 #include <commctrl.h>
 #include <cstdio>
@@ -32,13 +36,17 @@ bool UiFrench() {
 namespace {
 
 constexpr wchar_t kSettingsClass[] = L"openMouse.Settings";
+constexpr wchar_t kPanelClass[]    = L"openMouse.Settings.Panel";
 constexpr wchar_t kEngineClass[]   = L"openMouse.Engine";
 
 // ---------------------------------------------------------------- strings
 
 enum Str {
     sTitle, sSeat, sSensitivity, sAccel, sSlow, sFast, sSpeed, sScreen, sScreenNone,
-    sScreenItem, sPrimary, sUnplugged, sDefaults, sUndo, sClose, sHint, sApplied, sNotRunning, sSaveFailed, sStrCount
+    sScreenItem, sPrimary, sUnplugged, sDefaults, sUndo, sClose, sHint, sApplied, sNotRunning, sSaveFailed,
+    sLearn, sForget, sListening, sNothing, sAbsent, sEngineOff, sLearned, sAlready, sFull,
+    sNoButtons, sNative, sActNone, sActLeft, sActRight, sActMiddle, sActBack, sActForward, sActKeys,
+    sKeysNone, sKeysCapture, sWin, sCtrlName, sAltName, sShiftName, sWinName, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -59,10 +67,34 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Close",
     L"Sensitivity multiplies every movement. With acceleration on, it is replaced: the "
     L"pointer moves slowly for small gestures and fast for wide ones. The threshold sets "
-    L"the hand speed where it speeds up (lower: sooner).",
+    L"the hand speed where it speeds up (lower: sooner). A learned button acts at the "
+    L"position of the pointer of its own mouse.",
     L"Applied and saved.",
     L"Saved. openMouse is not running: it will be used at next start.",
     L"Could not save %s",
+    L"Learn a button",
+    L"Forget",
+    L"Press the button to learn (8 s)…",
+    L"Nothing received: this button sends nothing to Windows (only the manufacturer's software "
+    L"can read it), or it is not on this mouse.",
+    L"This mouse is not plugged in.",
+    L"openMouse is not running: there is nothing to listen to.",
+    L"Button learned. Choose what it does.",
+    L"This button is already learned.",
+    L"This mouse already has %d learned buttons: forget one first.",
+    L"No learned button. Learn one to give it an action.",
+    L"Windows also keeps its own action for this button.",
+    L"Do nothing",
+    L"Left click",
+    L"Right click",
+    L"Middle click",
+    L"Back button",
+    L"Forward button",
+    L"Keyboard shortcut",
+    L"Choose the shortcut…",
+    L"Press the shortcut…",
+    L"Win +",
+    L"Ctrl", L"Alt", L"Shift", L"Win",
 };
 
 const wchar_t* const kStrFr[sStrCount] = {
@@ -83,10 +115,34 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Fermer",
     L"La sensibilité multiplie chaque mouvement. Avec l'accélération, elle est remplacée : "
     L"la flèche va lentement pour les petits gestes et vite pour les grands. Le seuil règle "
-    L"la vitesse de la main où elle accélère (plus bas : plus tôt).",
+    L"la vitesse de la main où elle accélère (plus bas : plus tôt). Un bouton appris agit à "
+    L"la position de la flèche de sa propre souris.",
     L"Appliqué et enregistré.",
     L"Enregistré. openMouse n'est pas lancé : ce réglage servira au prochain démarrage.",
     L"Impossible d'enregistrer %s",
+    L"Apprendre un bouton",
+    L"Oublier",
+    L"Appuie sur le bouton à apprendre (8 s)…",
+    L"Rien reçu : ce bouton n'envoie rien à Windows (seul le logiciel du fabricant sait le lire), "
+    L"ou il n'est pas sur cette souris.",
+    L"Cette souris n'est pas branchée.",
+    L"openMouse n'est pas lancé : il n'y a rien à écouter.",
+    L"Bouton appris. Choisis ce qu'il fait.",
+    L"Ce bouton est déjà appris.",
+    L"Cette souris a déjà %d boutons appris : oublie-en un d'abord.",
+    L"Aucun bouton appris. Apprends-en un pour lui donner une action.",
+    L"Windows garde aussi sa propre action pour ce bouton.",
+    L"Ne rien faire",
+    L"Clic gauche",
+    L"Clic droit",
+    L"Clic milieu",
+    L"Bouton précédent",
+    L"Bouton suivant",
+    L"Raccourci clavier",
+    L"Choisir le raccourci…",
+    L"Appuie sur le raccourci…",
+    L"Win +",
+    L"Ctrl", L"Alt", L"Maj", L"Win",
 };
 
 const wchar_t* S(Str id) { return (UiFrench() ? kStrFr : kStrEn)[id]; }
@@ -105,19 +161,26 @@ const Range kRange[fFieldCount] = {
     { 0.2,  10.0, 10, L"%.1f"  },
 };
 
-// Control ids: one block of 16 per seat.
+// Control ids: one block of 32 per seat.
+constexpr int kPerSeat   = 32;
 constexpr int kIdBase    = 1000;
 constexpr int kIdUndo    = 900;
 constexpr int kIdClose   = 901;
-enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults };
-int CtlId(int seat, int ctl) { return kIdBase + seat * 16 + ctl; }
+enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
+               cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget };
+int CtlId(int seat, int ctl) { return kIdBase + seat * kPerSeat + ctl; }
+
+constexpr UINT_PTR kTimerApply = 1, kTimerLearn = 2;
+constexpr UINT_PTR kSubclassKeys = 1;
 
 // ---------------------------------------------------------------- state
 
 struct SeatUi {
     HWND label[fFieldCount]{}, value[fFieldCount]{}, slider[fFieldCount]{};
     HWND accel = nullptr, screenLabel = nullptr, screen = nullptr, defaults = nullptr;
-    RECT header{};   // swatch and title, painted by the window
+    HWND learn = nullptr, note = nullptr, list = nullptr, action = nullptr, keys = nullptr,
+         win = nullptr, forget = nullptr;
+    RECT header{};   // swatch and title, painted by the panel (content coordinates)
 };
 
 struct State {
@@ -126,11 +189,18 @@ struct State {
     Config  cur;             // what the window shows
     int     seats = 2;
     SeatUi  ui[kMaxSeats];
+    HWND    panel = nullptr;
     HWND    hint = nullptr, status = nullptr, undo = nullptr, close = nullptr;
     HFONT   font = nullptr, bold = nullptr;
     UINT    dpi = 96;
     bool    pending = false;
     std::vector<ScreenInfo> screens;   // plugged in when the window opened
+
+    int     scrollY = 0;                         // panel scroll offset, pixels
+    int     sel[kMaxSeats] = {};                 // learned button selected in each seat's list
+    std::wstring note[kMaxSeats];                // last thing said under a seat's learn button
+    int     learning = -1;                       // seat the engine is listening to, or -1
+    int     capturing = -1;                      // seat whose shortcut is being typed, or -1
 } g;
 
 int Px(int dip) { return MulDiv(dip, (int)g.dpi, 96); }
@@ -143,6 +213,12 @@ UINT DpiOf(HWND hwnd) {
     const UINT dpi = (UINT)GetDeviceCaps(dc, LOGPIXELSX);
     ReleaseDC(nullptr, dc);
     return dpi;
+}
+
+int ScrollBarWidth() {
+    using Fn = int (WINAPI*)(int, UINT);
+    static Fn fn = (Fn)GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForDpi");
+    return fn ? fn(SM_CXVSCROLL, g.dpi) : GetSystemMetrics(SM_CXVSCROLL);
 }
 
 double Get(const Config& c, int seat, Field f) {
@@ -192,6 +268,7 @@ void Apply() {
         disk.sensitivity[i] = g.cur.sensitivity[i];
         disk.accel[i]       = g.cur.accel[i];
         disk.screen[i]      = g.cur.screen[i];
+        disk.buttons[i]     = g.cur.buttons[i];
     }
     if (!disk.Save(g.path)) {
         wchar_t buf[MAX_PATH + 64];
@@ -207,7 +284,255 @@ void Apply() {
 // Coalesce a slider drag into a few writes a second.
 void ApplySoon(HWND hwnd) {
     g.pending = true;
-    SetTimer(hwnd, 1, 150, nullptr);
+    SetTimer(hwnd, kTimerApply, 150, nullptr);
+}
+
+// ---------------------------------------------------------------- learned buttons
+
+const wchar_t* ActionName(int action) {
+    static const Str ids[kActCount] = { sActNone, sActLeft, sActRight, sActMiddle, sActBack, sActForward, sActKeys };
+    return S(ids[action < 0 || action >= kActCount ? 0 : action]);
+}
+
+std::wstring KeyName(UINT vk) {
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    wchar_t name[64] = L"";
+    GetKeyNameTextW((LONG)((scan << 16) | (IsExtendedVk(vk) ? (1u << 24) : 0u)), name, 64);
+    if (!*name) swprintf(name, 64, L"0x%X", vk);
+    return name;
+}
+
+std::wstring ShortcutText(UINT mods, UINT vk) {
+    std::wstring s;
+    if (mods & kModCtrl)  s += std::wstring(S(sCtrlName))  + L"+";
+    if (mods & kModAlt)   s += std::wstring(S(sAltName))   + L"+";
+    if (mods & kModShift) s += std::wstring(S(sShiftName)) + L"+";
+    if (mods & kModWin)   s += std::wstring(S(sWinName))   + L"+";
+    return vk ? s + KeyName(vk) : s;
+}
+
+// What the list of a seat shows for one learned button.
+std::wstring ListText(const ButtonMap& b) {
+    std::wstring s = b.label.empty() ? b.sig : b.label;
+    s += L"  →  ";
+    s += (b.action == kActKeys && b.vk) ? ShortcutText(b.mods, b.vk) : std::wstring(ActionName(b.action));
+    return s;
+}
+
+// The action a standard mouse button has by itself, so that learning it does
+// not take it away.
+int NaturalAction(const ButtonMap& b) {
+    if (b.kind != L'm') return kActNone;
+    switch (b.code) {
+    case RI_MOUSE_LEFT_BUTTON_DOWN:   return kActLeft;
+    case RI_MOUSE_RIGHT_BUTTON_DOWN:  return kActRight;
+    case RI_MOUSE_MIDDLE_BUTTON_DOWN: return kActMiddle;
+    case RI_MOUSE_BUTTON_4_DOWN:      return kActBack;
+    case RI_MOUSE_BUTTON_5_DOWN:      return kActForward;
+    }
+    return kActNone;
+}
+
+ButtonMap* Selected(int seat) {
+    auto& list = g.cur.buttons[seat];
+    if (list.empty()) return nullptr;
+    if (g.sel[seat] < 0 || g.sel[seat] >= (int)list.size()) g.sel[seat] = 0;
+    return &list[g.sel[seat]];
+}
+
+// The learned-button part of one seat's section.
+void ShowButtons(int seat) {
+    SeatUi& u = g.ui[seat];
+    auto& list = g.cur.buttons[seat];
+    ButtonMap* b = Selected(seat);
+
+    SendMessageW(u.list, CB_RESETCONTENT, 0, 0);
+    for (const ButtonMap& m : list) SendMessageW(u.list, CB_ADDSTRING, 0, (LPARAM)ListText(m).c_str());
+    SendMessageW(u.list, CB_SETCURSEL, b ? g.sel[seat] : -1, 0);
+    SendMessageW(u.action, CB_SETCURSEL, b ? b->action : -1, 0);
+
+    const bool keys = b && b->action == kActKeys;
+    std::wstring text = S(sKeysNone);
+    if (g.capturing == seat)     text = S(sKeysCapture);
+    else if (keys && b->vk)      text = ShortcutText(b->mods & ~kModWin, b->vk);
+    SetWindowTextW(u.keys, text.c_str());
+    SendMessageW(u.win, BM_SETCHECK, (keys && (b->mods & kModWin)) ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    EnableWindow(u.learn, g.learning < 0 && g.capturing < 0);
+    EnableWindow(u.list, b != nullptr);
+    EnableWindow(u.action, b != nullptr);
+    EnableWindow(u.keys, keys);
+    EnableWindow(u.win, keys);
+    EnableWindow(u.forget, b != nullptr);
+
+    // Under the buttons: what the engine is doing, else what just happened,
+    // else what the selected button implies.
+    std::wstring note;
+    if (g.learning == seat)          note = S(sListening);
+    else if (!g.note[seat].empty())  note = g.note[seat];
+    else if (!b)                     note = S(sNoButtons);
+    else if (b->WindowsAlsoActs())   note = S(sNative);
+    SetWindowTextW(u.note, note.c_str());
+}
+
+void Note(int seat, const std::wstring& text) {
+    g.note[seat] = text;
+    ShowButtons(seat);
+}
+
+void OnLearnClick(HWND hwnd, int seat) {
+    if (g.learning >= 0) return;
+    if ((int)g.cur.buttons[seat].size() >= kMaxLearned) {
+        wchar_t buf[160];
+        swprintf(buf, 160, S(sFull), kMaxLearned);
+        Note(seat, buf);
+        return;
+    }
+    HWND engine = FindWindowW(kEngineClass, nullptr);
+    if (!engine) { Note(seat, S(sEngineOff)); return; }
+    if (g.pending) Apply();
+    if (!PostMessageW(engine, kLearnMsg, (WPARAM)seat + 1, 0)) { Note(seat, S(sEngineOff)); return; }
+    g.learning = seat;
+    g.note[seat].clear();
+    // The engine ends its own listening; this is only for the day it never answers.
+    SetTimer(hwnd, kTimerLearn, kLearnListenMs + 4000, nullptr);
+    for (int i = 0; i < g.seats; ++i) ShowButtons(i);
+}
+
+void EndLearning(HWND hwnd) {
+    KillTimer(hwnd, kTimerLearn);
+    const int seat = g.learning;
+    g.learning = -1;
+    if (seat >= 0 && seat < g.seats) for (int i = 0; i < g.seats; ++i) ShowButtons(i);
+}
+
+// The engine has finished listening to a seat's mouse.
+void OnLearned(HWND hwnd, int seat, LPARAM result) {
+    if (seat < 0 || seat >= g.seats) { EndLearning(hwnd); return; }
+    g.learning = -1;
+    KillTimer(hwnd, kTimerLearn);
+    std::wstring note = S(sNothing);
+    if (result == kLearnAbsent) note = S(sAbsent);
+    if (result == kLearnHeard) {
+        int heardSeat = -1;
+        std::wstring sig, label;
+        if (ReadLearnResult(heardSeat, sig, label) && heardSeat == seat) {
+            auto& list = g.cur.buttons[seat];
+            int found = -1;
+            for (int i = 0; i < (int)list.size(); ++i) if (list[i].sig == sig) found = i;
+            if (found >= 0) {
+                g.sel[seat] = found;
+                note = S(sAlready);
+            } else if ((int)list.size() < kMaxLearned) {
+                ButtonMap b;
+                b.sig   = sig;
+                b.label = label;
+                if (b.Parse()) {
+                    b.action = NaturalAction(b);
+                    list.push_back(std::move(b));
+                    g.sel[seat] = (int)list.size() - 1;
+                    note = S(sLearned);
+                    Apply();
+                }
+            }
+        }
+    }
+    g.note[seat] = note;
+    for (int i = 0; i < g.seats; ++i) ShowButtons(i);
+}
+
+void OnForget(int seat) {
+    auto& list = g.cur.buttons[seat];
+    if (list.empty()) return;
+    const int at = g.sel[seat] < (int)list.size() ? g.sel[seat] : 0;
+    list.erase(list.begin() + at);
+    if (g.sel[seat] >= (int)list.size()) g.sel[seat] = (int)list.size() - 1;
+    if (g.sel[seat] < 0) g.sel[seat] = 0;
+    g.note[seat].clear();
+    ShowButtons(seat);
+    Apply();
+}
+
+void OnListSelect(int seat) {
+    const int sel = (int)SendMessageW(g.ui[seat].list, CB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel >= (int)g.cur.buttons[seat].size()) return;
+    g.sel[seat] = sel;
+    g.note[seat].clear();
+    ShowButtons(seat);
+}
+
+void OnActionSelect(int seat) {
+    ButtonMap* b = Selected(seat);
+    const int act = (int)SendMessageW(g.ui[seat].action, CB_GETCURSEL, 0, 0);
+    if (!b || act < 0 || act >= kActCount) return;
+    b->action = act;
+    // A shortcut action with no shortcut yet does nothing; ask for it at once.
+    g.note[seat].clear();
+    ShowButtons(seat);
+    Apply();
+    if (act == kActKeys && !b->vk) SendMessageW(g.ui[seat].keys, BM_CLICK, 0, 0);
+}
+
+void StopCapture(int seat) {
+    g.capturing = -1;
+    if (seat >= 0 && seat < g.seats) ShowButtons(seat);
+}
+
+void OnKeysClick(int seat) {
+    if (g.capturing == seat) { StopCapture(seat); return; }
+    if (!Selected(seat)) return;
+    g.capturing = seat;
+    ShowButtons(seat);
+    SetFocus(g.ui[seat].keys);
+}
+
+void OnWinToggle(int seat) {
+    ButtonMap* b = Selected(seat);
+    if (!b) return;
+    if (SendMessageW(g.ui[seat].win, BM_GETCHECK, 0, 0) == BST_CHECKED) b->mods |= kModWin;
+    else                                                                 b->mods &= ~kModWin;
+    ShowButtons(seat);
+    Apply();
+}
+
+bool SeatOf(int id, int& seat, int& ctl);
+
+// The shortcut is typed on the button itself: its subclass sees the keys (and
+// asks the dialog loop to leave them alone) while capturing.
+LRESULT CALLBACK KeysProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    int seat = -1, ctl = 0;
+    const bool mine = SeatOf(GetDlgCtrlID(hwnd), seat, ctl) && ctl == cKeys;
+    if (mine && g.capturing == seat) {
+        switch (msg) {
+        case WM_GETDLGCODE:
+            return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
+        case WM_CHAR: case WM_SYSCHAR: case WM_KEYUP: case WM_SYSKEYUP:
+            return 0;
+        case WM_KILLFOCUS:
+            StopCapture(seat);
+            break;
+        case WM_KEYDOWN: case WM_SYSKEYDOWN: {
+            const UINT vk = (UINT)wp;
+            if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN)
+                return 0;                          // a modifier alone: wait for the key
+            if (vk == VK_ESCAPE) { StopCapture(seat); return 0; }
+            if (ButtonMap* b = Selected(seat)) {
+                UINT mods = b->mods & kModWin;
+                if (GetKeyState(VK_CONTROL) & 0x8000) mods |= kModCtrl;
+                if (GetKeyState(VK_MENU)    & 0x8000) mods |= kModAlt;
+                if (GetKeyState(VK_SHIFT)   & 0x8000) mods |= kModShift;
+                b->vk   = vk;
+                b->mods = mods;
+                g.note[seat].clear();
+                g.capturing = -1;
+                ShowButtons(seat);
+                Apply();
+            }
+            return 0;
+        }
+        }
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
 // ---------------------------------------------------------------- controls
@@ -253,6 +578,8 @@ void ShowSeat(int seat) {
         sel = (int)g.screens.size() + 1;
     }
     SendMessageW(u.screen, CB_SETCURSEL, sel, 0);
+
+    ShowButtons(seat);
 }
 
 void OnScreen(int seat) {
@@ -276,14 +603,15 @@ BOOL CALLBACK SetFontProc(HWND child, LPARAM font) {
 
 void CreateControls(HWND hwnd) {
     const wchar_t* names[fFieldCount] = { S(sSensitivity), S(sSlow), S(sFast), S(sSpeed) };
+    HWND p = g.panel;
     for (int i = 0; i < g.seats; ++i) {
         SeatUi& u = g.ui[i];
         for (int f = 0; f < fFieldCount; ++f) {
             if (f == fSlow)   // the checkbox sits between sensitivity and the accel sliders
-                u.accel = Make(hwnd, L"BUTTON", S(sAccel), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cAccel));
-            u.label[f]  = Make(hwnd, L"STATIC", names[f], SS_LEFT | SS_NOPREFIX, CtlId(i, cLabel + f));
-            u.value[f]  = Make(hwnd, L"STATIC", L"", SS_RIGHT, CtlId(i, cValue + f));
-            u.slider[f] = Make(hwnd, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
+                u.accel = Make(p, L"BUTTON", S(sAccel), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cAccel));
+            u.label[f]  = Make(p, L"STATIC", names[f], SS_LEFT | SS_NOPREFIX, CtlId(i, cLabel + f));
+            u.value[f]  = Make(p, L"STATIC", L"", SS_RIGHT, CtlId(i, cValue + f));
+            u.slider[f] = Make(p, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
                                CtlId(i, cSlider + f));
             const Range& r = kRange[f];
             SendMessageW(u.slider[f], TBM_SETRANGEMIN, FALSE, (LPARAM)std::lround(r.lo * r.scale));
@@ -291,9 +619,19 @@ void CreateControls(HWND hwnd) {
             SendMessageW(u.slider[f], TBM_SETLINESIZE, 0, 1);
             SendMessageW(u.slider[f], TBM_SETPAGESIZE, 0, (LPARAM)std::lround(r.scale / 2));
         }
-        u.screenLabel = Make(hwnd, L"STATIC", S(sScreen), SS_LEFT, CtlId(i, cScreenLabel));
-        u.screen = Make(hwnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cScreen));
-        u.defaults = Make(hwnd, L"BUTTON", S(sDefaults), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cDefaults));
+        u.screenLabel = Make(p, L"STATIC", S(sScreen), SS_LEFT, CtlId(i, cScreenLabel));
+        u.screen = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cScreen));
+        u.defaults = Make(p, L"BUTTON", S(sDefaults), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cDefaults));
+
+        u.learn  = Make(p, L"BUTTON", S(sLearn), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cLearn));
+        u.forget = Make(p, L"BUTTON", S(sForget), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cForget));
+        u.note   = Make(p, L"STATIC", L"", SS_LEFT, CtlId(i, cNote));
+        u.list   = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cList));
+        u.action = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cAction));
+        for (int a = 0; a < kActCount; ++a) SendMessageW(u.action, CB_ADDSTRING, 0, (LPARAM)ActionName(a));
+        u.keys   = Make(p, L"BUTTON", S(sKeysNone), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cKeys));
+        u.win    = Make(p, L"BUTTON", S(sWin), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cWin));
+        SetWindowSubclass(u.keys, KeysProc, kSubclassKeys, 0);
         ShowSeat(i);
     }
     g.hint   = Make(hwnd, L"STATIC", S(sHint), SS_LEFT, 0);
@@ -302,11 +640,91 @@ void CreateControls(HWND hwnd) {
     g.close  = Make(hwnd, L"BUTTON", S(sClose), WS_TABSTOP | BS_DEFPUSHBUTTON, kIdClose);
 }
 
+// ---------------------------------------------------------------- scrolling
+
+void ScrollTo(int pos) {
+    SCROLLINFO si{ sizeof(si), SIF_RANGE | SIF_PAGE };
+    GetScrollInfo(g.panel, SB_VERT, &si);
+    int most = si.nMax - (int)si.nPage + 1;
+    if (most < 0) most = 0;
+    if (pos > most) pos = most;
+    if (pos < 0) pos = 0;
+    if (pos == g.scrollY) return;
+    ScrollWindowEx(g.panel, 0, g.scrollY - pos, nullptr, nullptr, nullptr, nullptr,
+                   SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE);
+    g.scrollY = pos;
+    si.fMask = SIF_POS;
+    si.nPos  = pos;
+    SetScrollInfo(g.panel, SB_VERT, &si, TRUE);
+    UpdateWindow(g.panel);
+}
+
+void OnPanelScroll(WPARAM wp) {
+    SCROLLINFO si{ sizeof(si), SIF_ALL };
+    GetScrollInfo(g.panel, SB_VERT, &si);
+    int pos = si.nPos;
+    switch (LOWORD(wp)) {
+    case SB_LINEUP:        pos -= Px(24); break;
+    case SB_LINEDOWN:      pos += Px(24); break;
+    case SB_PAGEUP:        pos -= (int)si.nPage; break;
+    case SB_PAGEDOWN:      pos += (int)si.nPage; break;
+    case SB_THUMBTRACK:
+    case SB_THUMBPOSITION: pos = si.nTrackPos; break;
+    case SB_TOP:           pos = 0; break;
+    case SB_BOTTOM:        pos = si.nMax; break;
+    default: return;
+    }
+    ScrollTo(pos);
+}
+
 // ---------------------------------------------------------------- layout
 
 constexpr int kMargin = 16, kColW = 250, kGap = 28, kPerRow = 4;
 
 int Columns() { return g.seats < kPerRow ? g.seats : kPerRow; }
+
+// Lays out one seat's section from (x, y); returns where it ends.
+int LayoutSeat(int i, int x, int y) {
+    SeatUi& u = g.ui[i];
+    const int colW = Px(kColW);
+    auto place = [](HWND h, int px, int py, int w, int hgt) {
+        SetWindowPos(h, nullptr, px, py, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
+    };
+    u.header = { x, y, x + colW, y + Px(24) };
+    y += Px(34);
+    for (int f = 0; f < fFieldCount; ++f) {
+        if (f == fSlow) { place(u.accel, x, y, colW, Px(22)); y += Px(30); }
+        place(u.label[f], x, y, colW - Px(64), Px(18));
+        place(u.value[f], x + colW - Px(64), y, Px(64), Px(18));
+        y += Px(20);
+        place(u.slider[f], x - Px(4), y, colW + Px(8), Px(28));
+        y += Px(f == fSens ? 40 : 34);
+    }
+    y += Px(4);
+    place(u.screenLabel, x, y, colW, Px(18));
+    y += Px(20);
+    place(u.screen, x, y, colW, Px(200));
+    y += Px(38);
+    place(u.defaults, x, y, Px(150), Px(28));
+    y += Px(28) + Px(20);
+
+    // Learned buttons.
+    const int forgetW = Px(84);
+    place(u.learn, x, y, colW - forgetW - Px(6), Px(28));
+    place(u.forget, x + colW - forgetW, y, forgetW, Px(28));
+    y += Px(34);
+    place(u.note, x, y, colW, Px(50));
+    y += Px(54);
+    place(u.list, x, y, colW, Px(200));
+    y += Px(30);
+    place(u.action, x, y, colW, Px(200));
+    y += Px(30);
+    const int winW = Px(54);
+    place(u.keys, x, y, colW - winW - Px(6), Px(26));
+    place(u.win, x + colW - winW, y, winW, Px(26));
+    y += Px(26);
+    return y;
+}
 
 // Lays out every control for the current DPI; returns the client size.
 SIZE Layout(HWND hwnd) {
@@ -317,50 +735,60 @@ SIZE Layout(HWND hwnd) {
     g.bold = CreateFontW(-MulDiv(11, (int)g.dpi, 72), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
                          0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     EnumChildWindows(hwnd, SetFontProc, (LPARAM)g.font);
-
-    const int colW = Px(kColW);
     auto place = [](HWND h, int x, int y, int w, int hgt) {
         SetWindowPos(h, nullptr, x, y, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
     };
 
-    int bottom = 0;
+    // The panel is laid out unscrolled, then scrolled back to the top.
+    g.scrollY = 0;
+    const int colW = Px(kColW);
+    int bottom = 0, rowTop = Px(kMargin), rowEnd = 0;
     for (int i = 0; i < g.seats; ++i) {
-        SeatUi& u = g.ui[i];
-        const int x  = Px(kMargin) + (i % kPerRow) * (colW + Px(kGap));
-        int y        = Px(kMargin) + (i / kPerRow) * Px(470);
-        u.header = { x, y, x + colW, y + Px(24) };
-        y += Px(34);
-        for (int f = 0; f < fFieldCount; ++f) {
-            if (f == fSlow) { place(u.accel, x, y, colW, Px(22)); y += Px(30); }
-            place(u.label[f], x, y, colW - Px(64), Px(18));
-            place(u.value[f], x + colW - Px(64), y, Px(64), Px(18));
-            y += Px(20);
-            place(u.slider[f], x - Px(4), y, colW + Px(8), Px(28));
-            y += Px(f == fSens ? 40 : 34);
-        }
-        y += Px(4);
-        place(u.screenLabel, x, y, colW, Px(18));
-        y += Px(20);
-        place(u.screen, x, y, colW, Px(200));
-        y += Px(38);
-        place(u.defaults, x, y, Px(150), Px(28));
-        y += Px(28);
-        if (y > bottom) bottom = y;
+        if (i > 0 && i % kPerRow == 0) { rowTop = rowEnd + Px(28); rowEnd = 0; }
+        const int x = Px(kMargin) + (i % kPerRow) * (colW + Px(kGap));
+        const int end = LayoutSeat(i, x, rowTop);
+        if (end > rowEnd) rowEnd = end;
+        if (end > bottom) bottom = end;
     }
+    const int width    = Px(kMargin) * 2 + Columns() * colW + (Columns() - 1) * Px(kGap);
+    const int contentH = bottom + Px(kMargin);
+    const int footerH  = Px(12) + Px(86) + Px(28) + Px(30) + Px(kMargin);
 
-    const int width = Px(kMargin) * 2 + Columns() * colW + (Columns() - 1) * Px(kGap);
+    // The panel takes the height the screen allows; what does not fit scrolls.
+    MONITORINFO mi{ sizeof(mi) };
+    GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+    RECT wr{}, cr{};
+    GetWindowRect(hwnd, &wr);
+    GetClientRect(hwnd, &cr);
+    const int chrome    = (wr.bottom - wr.top) - (cr.bottom - cr.top);
+    const int maxClient = (mi.rcWork.bottom - mi.rcWork.top) - chrome - Px(8);
+    int panelH = contentH;
+    const bool scrolls = panelH + footerH > maxClient;
+    if (scrolls) panelH = maxClient - footerH;
+    if (panelH < Px(200)) panelH = Px(200);
+    const int sbW = scrolls ? ScrollBarWidth() : 0;
+
+    place(g.panel, 0, 0, width + sbW, panelH);
+    SCROLLINFO si{ sizeof(si), SIF_RANGE | SIF_PAGE | SIF_POS };
+    si.nMin  = 0;
+    si.nMax  = contentH - 1;
+    si.nPage = (UINT)(scrolls ? panelH : contentH + 1);
+    si.nPos  = 0;
+    SetScrollInfo(g.panel, SB_VERT, &si, TRUE);
+
     const int inner = width - Px(kMargin) * 2;
-    int y = bottom + Px(20);
-    place(g.hint, Px(kMargin), y, inner, Px(64));
-    y += Px(70);
+    int y = panelH + Px(12);
+    place(g.hint, Px(kMargin), y, inner, Px(80));
+    y += Px(86);
     place(g.status, Px(kMargin), y, inner, Px(18));
     y += Px(28);
     const int closeW = Px(100), undoW = Px(190), h = Px(30);
-    place(g.close, width - Px(kMargin) - closeW, y, closeW, h);
-    place(g.undo,  width - Px(kMargin) - closeW - Px(10) - undoW, y, undoW, h);
+    place(g.close, width + sbW - Px(kMargin) - closeW, y, closeW, h);
+    place(g.undo,  width + sbW - Px(kMargin) - closeW - Px(10) - undoW, y, undoW, h);
     y += h + Px(kMargin);
+    InvalidateRect(g.panel, nullptr, TRUE);
     InvalidateRect(hwnd, nullptr, TRUE);
-    return { width, y };
+    return { width + sbW, y };
 }
 
 RECT WindowRectFor(SIZE client, DWORD style) {
@@ -372,10 +800,11 @@ RECT WindowRectFor(SIZE client, DWORD style) {
     return r;
 }
 
-void Paint(HWND hwnd) {
+void PaintPanel(HWND hwnd) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd, &ps);
     SetBkMode(dc, TRANSPARENT);
+    SetViewportOrgEx(dc, 0, -g.scrollY, nullptr);
     HGDIOBJ old = SelectObject(dc, g.bold);
     for (int i = 0; i < g.seats; ++i) {
         const RECT& h = g.ui[i].header;
@@ -397,12 +826,34 @@ void Paint(HWND hwnd) {
     EndPaint(hwnd, &ps);
 }
 
+// The panel only hosts the controls: it hands their notifications to the
+// window, scrolls, and paints the seat headers.
+LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_COMMAND:
+    case WM_HSCROLL:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return SendMessageW(GetParent(hwnd), msg, wp, lp);
+    case WM_VSCROLL:
+        OnPanelScroll(wp);
+        return 0;
+    case WM_MOUSEWHEEL:
+        ScrollTo(g.scrollY - (int)((short)HIWORD(wp) * Px(48) / WHEEL_DELTA));
+        return 0;
+    case WM_PAINT:
+        PaintPanel(hwnd);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 // ---------------------------------------------------------------- events
 
 bool SeatOf(int id, int& seat, int& ctl) {
-    if (id < kIdBase || id >= kIdBase + g.seats * 16) return false;
-    seat = (id - kIdBase) / 16;
-    ctl  = (id - kIdBase) % 16;
+    if (id < kIdBase || id >= kIdBase + g.seats * kPerSeat) return false;
+    seat = (id - kIdBase) / kPerSeat;
+    ctl  = (id - kIdBase) % kPerSeat;
     return true;
 }
 
@@ -425,6 +876,9 @@ void OnCommand(HWND hwnd, int id) {
             g.cur.sensitivity[i] = g.opened.sensitivity[i];
             g.cur.accel[i]       = g.opened.accel[i];
             g.cur.screen[i]      = g.opened.screen[i];
+            g.cur.buttons[i]     = g.opened.buttons[i];
+            g.sel[i] = 0;
+            g.note[i].clear();
             ShowSeat(i);
         }
         Apply();
@@ -442,6 +896,14 @@ void OnCommand(HWND hwnd, int id) {
         g.cur.screen[seat].clear();
         ShowSeat(seat);
         Apply();
+    } else if (ctl == cLearn) {
+        OnLearnClick(hwnd, seat);
+    } else if (ctl == cForget) {
+        OnForget(seat);
+    } else if (ctl == cKeys) {
+        OnKeysClick(seat);
+    } else if (ctl == cWin) {
+        OnWinToggle(seat);
     }
 }
 
@@ -450,14 +912,29 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_HSCROLL:
         if (lp) OnSlider(hwnd, (HWND)lp);
         return 0;
+    case WM_MOUSEWHEEL:
+        return SendMessageW(g.panel, msg, wp, lp);
     case WM_COMMAND:
         if (HIWORD(wp) == BN_CLICKED) OnCommand(hwnd, LOWORD(wp));
         else if (HIWORD(wp) == CBN_SELCHANGE) {
             int seat, ctl;
-            if (SeatOf(LOWORD(wp), seat, ctl) && ctl == cScreen) OnScreen(seat);
+            if (SeatOf(LOWORD(wp), seat, ctl)) {
+                if (ctl == cScreen)      OnScreen(seat);
+                else if (ctl == cList)   OnListSelect(seat);
+                else if (ctl == cAction) OnActionSelect(seat);
+            }
         }
         return 0;
+    case kLearnedMsg:
+        OnLearned(hwnd, (int)wp, lp);
+        return 0;
     case WM_TIMER:
+        if (wp == kTimerLearn) {            // the engine never answered
+            const int seat = g.learning;
+            EndLearning(hwnd);
+            if (seat >= 0 && seat < g.seats) Note(seat, S(sNothing));
+            return 0;
+        }
         KillTimer(hwnd, wp);
         if (g.pending) Apply();
         return 0;
@@ -469,9 +946,6 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTextColor(dc, GetSysColor((HWND)lp == g.hint ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
-    case WM_PAINT:
-        Paint(hwnd);
-        return 0;
     case WM_DPICHANGED: {
         g.dpi = HIWORD(wp);
         const SIZE client = Layout(hwnd);
@@ -483,6 +957,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE:
         if (g.pending) Apply();
+        if (g.learning >= 0) {              // stop the engine listening to a mouse nobody watches
+            if (HWND engine = FindWindowW(kEngineClass, nullptr)) PostMessageW(engine, kLearnMsg, 0, 0);
+            g.learning = -1;
+        }
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
@@ -528,12 +1006,27 @@ int RunSettings(HINSTANCE inst) {
     wc.lpszClassName = kSettingsClass;
     RegisterClassExW(&wc);
 
+    WNDCLASSEXW pc{};
+    pc.cbSize        = sizeof(pc);
+    pc.lpfnWndProc   = PanelProc;
+    pc.hInstance     = inst;
+    pc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    pc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+    pc.lpszClassName = kPanelClass;
+    RegisterClassExW(&pc);
+
     // Not resizable, never topmost: it must not stand in the way of anything.
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
     HWND hwnd = CreateWindowExW(WS_EX_CONTROLPARENT, kSettingsClass, S(sTitle), style,
                                 CW_USEDEFAULT, CW_USEDEFAULT, 100, 100,
                                 nullptr, nullptr, inst, nullptr);
     if (!hwnd) return 1;
+    // The engine runs elevated and this window may not: let its answer through.
+    ChangeWindowMessageFilterEx(hwnd, kLearnedMsg, MSGFLT_ALLOW, nullptr);
+
+    g.panel = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN,
+                              0, 0, 100, 100, hwnd, nullptr, inst, nullptr);
+    if (!g.panel) return 1;
 
     // Open on the screen where the pointer that asked for it is.
     POINT pt{};

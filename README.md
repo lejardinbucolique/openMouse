@@ -56,6 +56,9 @@ until you run `--probe` and `--probe-echo` there.
   re-identify devices, or open the log folder.
 - A settings window sets each seat's speed and acceleration with sliders, applied at once
   while the engine runs, without editing any file.
+- Any button of a mouse can be learned, even beyond the five Windows maps and without the
+  manufacturer's driver, and given an action played at that mouse's own pointer; see
+  [Learned buttons](#learned-buttons).
 - Device bindings are stored by device interface path, so they survive reboots and
   replugging.
 
@@ -242,6 +245,59 @@ device in `[mouse]` by hand to seat it anyway. On a first run with no bindings a
 devices are auto-assigned round-robin so nothing is dead out of the box, but run
 `--identify` before trusting the assignment.
 
+### Learned buttons
+
+A mouse often has more to say than the five buttons Windows maps: a button that sends
+Windows+D through the mouse's own keyboard interface, media keys, messages only the
+manufacturer's driver reads. In the settings window, each mouse has a **Learn a button**
+button: press it, then press the button within eight seconds. The engine listens to that
+one mouse and keeps the first thing it sends; you then choose what it does:
+
+- a click (left, right, middle, back, forward), played at the position of **that mouse's
+  own pointer**, with the same ownership and drag rules as the mouse's own buttons;
+- a keyboard shortcut, sent to the whole system;
+- nothing.
+
+**Forget** removes the selected button. Up to 16 buttons per mouse. The table is stored in
+the `[seatN]` section and taken by the running engine at once, like the speeds:
+
+```ini
+[seat0]
+button=k:15B|6|1:54|Mouse key "Left Windows"      ; sig | action | mods:key | label
+button=hFF00:0101A0|2|0:0|Manufacturer button 0101A0
+```
+
+`action` is 0 nothing, 1 left, 2 right, 3 middle, 4 back, 5 forward, 6 shortcut (`mods`
+is a bit mask, 1 Ctrl, 2 Alt, 4 Shift, 8 Win, and `key` a virtual key code, both in hex).
+The signature says what the button sends to Windows:
+
+| Signature | What it is |
+|---|---|
+| `m:<hex>` | A bit of the raw mouse button flags (`40` is the "back" button). The chosen action **replaces** the engine's own relay of that button |
+| `k:<hex>` | A key of the mouse's own keyboard interface: scan code, plus `100` for an extended key (`15B` is the Windows key) |
+| `h<page>:<hex>` | A report of the mouse's media (`0C`), system (`01`) or manufacturer (`FF00`) collection, as its raw bytes |
+
+What is listened to is the mouse's own hardware, nothing else. A keyboard or media
+interface is looked at only when it has the same hardware id as a mouse bound to a seat
+(`openmouse.exe --list` shows which interfaces that is) and is not a keyboard the ini
+binds itself, so a real keyboard is never read. Keys typed on it are neither retained nor
+logged. Even on a radio receiver shared by a mouse and a keyboard, only keys that do not
+type (modifiers, F keys, navigation, media keys) can be learned.
+
+Limits, said plainly:
+
+- A button only the manufacturer's software can read (a message exclusive to its driver,
+  or one the mouse keeps for itself) sends nothing to Windows and cannot be learned: the
+  window then says so. The same goes for the sixth button and beyond of a mouse whose
+  extra buttons Windows folds into the five it maps: the raw mouse input never shows them.
+- For a key or a media key, Windows also carries out its own action (a button that sends
+  Windows+D still shows the desktop): the keyboard stream cannot be intercepted per
+  device without blinding the engine (see the keyboard gate note in `main.cpp`). The
+  window says so under such a button. A manufacturer message, or a mouse button of the
+  `m:` kind, has no such effect of its own.
+- Two mice of the same model share their hardware id: the keys and reports of their
+  interfaces then belong to no seat (their mouse buttons still do).
+
 Each arrow that moves costs about 0.2 to 0.3 ms per flush (measured, 1 to 8 overlays).
 
 ## Command reference
@@ -321,10 +377,10 @@ is drawn as a layered, click-through, topmost window.
 | File | Responsibility |
 |---|---|
 | `src/main.cpp` | Raw input capture, routing, injection, suppression gate, watchdog, tray, janitor, command modes |
-| `src/devices.cpp` | Device enumeration and stable identity via the registry Enum key |
+| `src/devices.cpp` | Device enumeration (mice, keyboards, HID collections) and stable identity via the registry Enum key |
 | `src/overlay.cpp` | Per-seat pointer rendering derived from the real system cursor |
-| `src/config.cpp` | Configuration load and save, logging |
-| `src/settings.cpp` | Settings window (`--settings`): per-seat speed and acceleration |
+| `src/config.cpp` | Configuration load and save (seat values, learned buttons), logging |
+| `src/settings.cpp` | Settings window (`--settings`): per-seat speed, acceleration, screen, learned buttons |
 
 ## Findings
 
@@ -377,8 +433,8 @@ same mitigation.
 - Seat counts above two are supported in code but only lightly tested on real hardware.
 - A new mouse that exposes several mouse collections can only be told from a ghost by its
   suffix; if the wrong one is seated, list the right interface in `[mouse]`.
-- The settings window covers speed and
-  acceleration only; bindings and colours are still edited in the file.
+- The settings window covers speed, acceleration, screen and learned buttons; bindings and
+  colours are still edited in the file.
 
 ## Building
 

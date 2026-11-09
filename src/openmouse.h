@@ -27,6 +27,15 @@ constexpr WORD  kAppIconResource = 1;
 // Posted to the engine window by the settings window once it has written new
 // seat values to the configuration file: re-read them and use them at once.
 constexpr UINT  kReloadSettingsMsg = WM_APP + 2;
+// Settings window -> engine: listen to the buttons of one mouse and keep the
+// first one pressed (wParam = seat + 1), or stop listening (wParam = 0).
+constexpr UINT  kLearnMsg = WM_APP + 3;
+// Engine -> settings window, once the listening is over. wParam = seat,
+// lParam = kLearnHeard (the signature is in the learn file, ReadLearnResult)
+// or kLearnNothing (nothing came in time).
+constexpr UINT  kLearnedMsg = WM_APP + 4;
+constexpr LPARAM kLearnHeard = 1, kLearnNothing = 2, kLearnAbsent = 3;   // absent: that mouse is not plugged in
+constexpr DWORD  kLearnListenMs = 8000;
 
 // ---------------------------------------------------------------- device id
 
@@ -39,7 +48,8 @@ struct DeviceInfo {
     HANDLE       handle = nullptr;   // volatile, valid for this session only
     std::wstring path;               // stable identity, used in config
     std::wstring friendlyName;       // best-effort, for the UI
-    DWORD        type = 0;           // RIM_TYPEMOUSE | RIM_TYPEKEYBOARD
+    DWORD        type = 0;           // RIM_TYPEMOUSE | RIM_TYPEKEYBOARD | RIM_TYPEHID
+    USHORT       page = 0;           // RIM_TYPEHID only: top-level usage page
 };
 
 std::vector<DeviceInfo> EnumerateDevices();
@@ -62,6 +72,14 @@ std::wstring HardwareKey(const std::wstring& path);
 // The same without the collection suffixes ("hid#vid_046d&pid_c534"): what
 // all the interfaces of one product have in common, ghost collections included.
 std::wstring HardwareBase(const std::wstring& path);
+
+// Keys whose input needs KEYEVENTF_EXTENDEDKEY (arrows, Insert, right Ctrl, ...).
+bool IsExtendedVk(UINT vk);
+
+// Raw-input devices that are neither mice nor keyboards: the media-key,
+// system-control and manufacturer collections a mouse exposes next to its
+// pointer. The usage page of each is in DeviceInfo::page.
+std::vector<DeviceInfo> EnumerateHidDevices();
 
 // Whether an unknown mouse may be given a seat on its own: false for the
 // integrated devices (ACPI touchpads, PS/2) and for any interface that carries
@@ -103,6 +121,44 @@ struct Seat {
 
 // ---------------------------------------------------------------- config
 
+// What a learned button does. The clicks are played at the position of the
+// pointer of the mouse the button belongs to; the keys are a system-wide
+// shortcut.
+enum ButtonAction { kActNone = 0, kActLeft, kActRight, kActMiddle, kActBack, kActForward,
+                    kActKeys, kActCount };
+constexpr int kMaxLearned = 16;   // learned buttons per seat
+
+// Modifier bits of a shortcut (ButtonMap::mods).
+constexpr UINT kModCtrl = 1, kModAlt = 2, kModShift = 4, kModWin = 8;
+
+// A button the engine was taught by listening to its mouse. The signature says
+// what that button sends to Windows, as text, so it can live in the ini:
+//   m:<hex>        a bit of the raw mouse button flags (0x1 left down, 0x40 the
+//                  "previous" button down, ...). Replaces the engine's own relay
+//                  of that button.
+//   k:<hex>        a key of the mouse's own keyboard interface: scan code, plus
+//                  0x100 for an extended key (Windows key = 15B).
+//   h<page>:<hex>  a report of the mouse's media (0C), system (01) or
+//                  manufacturer (FF00) collection, as its raw bytes.
+// Ini line, in the section of the seat:  button=<sig>|<action>|<mods:vk hex>|<label>
+struct ButtonMap {
+    std::wstring sig;
+    std::wstring label;               // for the settings window only
+    int          action = kActNone;
+    UINT         mods = 0, vk = 0;    // kActKeys: the shortcut
+
+    // Read from sig by Parse().
+    wchar_t           kind = 0;       // 'm', 'k' or 'h'
+    UINT              code = 0;       // m: the flag bit; k: scan | 0x100 if extended
+    USHORT            page = 0;       // h: the usage page
+    std::vector<BYTE> report;         // h: the report that means "pressed"
+
+    bool Parse();                     // false when sig is not one of the forms above
+    // True when Windows keeps acting on this button by itself as well (a key or
+    // a media key). A manufacturer message, or a mouse flag we relay, does not.
+    bool WindowsAlsoActs() const { return kind == 'k' || (kind == 'h' && page != 0xFF00); }
+};
+
 struct Config {
     // Per-seat device bindings, keyed by device interface path.
     std::map<std::wstring, int> mouseBinding;
@@ -142,6 +198,9 @@ struct Config {
     // shut in a rectangle nobody can see; the key is kept for when it returns.
     std::vector<std::wstring> screen = std::vector<std::wstring>(4);
 
+    // Buttons learned for each seat's mouse (see ButtonMap).
+    std::vector<std::vector<ButtonMap>> buttons = std::vector<std::vector<ButtonMap>>(kMaxSeats);
+
     // Draw a coloured ring around the seat that currently owns the real
     // system cursor.
     bool markActiveSeat = true;
@@ -167,6 +226,11 @@ struct Config {
     bool Save(const std::wstring& path) const;
     static std::wstring DefaultPath();
 };
+
+// The button the engine just heard, handed to the settings window (a process of
+// its own) through a small file beside the ini: a message cannot carry text.
+bool WriteLearnResult(int seat, const std::wstring& sig, const std::wstring& label);
+bool ReadLearnResult(int& seat, std::wstring& sig, std::wstring& label);
 
 // ---------------------------------------------------------------- overlay
 

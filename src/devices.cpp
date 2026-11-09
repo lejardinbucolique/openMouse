@@ -160,4 +160,45 @@ std::vector<DeviceInfo> EnumerateDevices() {
     return result;
 }
 
+bool IsExtendedVk(UINT vk) {
+    switch (vk) {
+    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END: case VK_PRIOR: case VK_NEXT:
+    case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: case VK_DIVIDE: case VK_NUMLOCK:
+    case VK_RCONTROL: case VK_RMENU: case VK_LWIN: case VK_RWIN: case VK_APPS: case VK_SNAPSHOT:
+        return true;
+    }
+    return false;
+}
+
+std::vector<DeviceInfo> EnumerateHidDevices() {
+    std::vector<DeviceInfo> result;
+
+    UINT count = 0;
+    if (GetRawInputDeviceList(nullptr, &count, sizeof(RAWINPUTDEVICELIST)) != 0 || count == 0)
+        return result;
+    std::vector<RAWINPUTDEVICELIST> list(count);
+    UINT got = GetRawInputDeviceList(list.data(), &count, sizeof(RAWINPUTDEVICELIST));
+    if (got == (UINT)-1) return result;
+    list.resize(got);
+
+    for (const auto& d : list) {
+        if (d.dwType != RIM_TYPEHID) continue;
+
+        DeviceInfo info;
+        info.handle = d.hDevice;
+        info.type   = d.dwType;
+        info.path   = DevicePathFromHandle(d.hDevice);
+        if (info.path.empty()) continue;
+
+        RID_DEVICE_INFO di{};
+        di.cbSize = sizeof(di);
+        UINT size = sizeof(di);
+        if (GetRawInputDeviceInfoW(d.hDevice, RIDI_DEVICEINFO, &di, &size) == (UINT)-1) continue;
+        info.page = di.hid.usUsagePage;
+        info.friendlyName = FriendlyNameFromPath(info.path);
+        result.push_back(std::move(info));
+    }
+    return result;
+}
+
 } // namespace om

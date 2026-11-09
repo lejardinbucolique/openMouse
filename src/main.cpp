@@ -114,6 +114,29 @@ bool                      g_keyboardRouting = false;
 
 constexpr USHORT SC_LCTRL = 0x1D, SC_LALT = 0x38, SC_LSHIFT = 0x2A, SC_Q = 0x10;
 
+// ---------------------------------------------------------------- learned buttons
+//
+// A mouse often has more to say than the five buttons Windows maps: its own
+// keyboard interface (a button that sends Windows+D), media and system keys,
+// messages only the manufacturer's driver reads. The settings window asks the
+// engine to listen to ONE mouse and keep the first thing it sends (kLearnMsg);
+// the signatures kept are then matched here (ButtonMap).
+//
+// What is listened to is the mouse's own hardware, nothing else: a keyboard or
+// media interface is looked at only when it shares its hardware id with a mouse
+// bound to a seat (g_ownerSeat) and is not a keyboard the ini binds itself. A
+// real keyboard is never in that table, so its keys are neither retained nor
+// logged; and even on a receiver shared by a mouse and a keyboard, only keys
+// that do not type (modifiers, F keys, navigation, media) can be learned.
+int                   g_learnSeat = -1;          // the seat being listened to, or -1
+DWORD                 g_learnArmAt = 0;          // events before this are the click that asked
+std::map<HANDLE, int>    g_ownerSeat;            // keyboard / HID interface -> seat of its mouse
+std::map<HANDLE, USHORT> g_hidPage;              // HID interface -> its usage page
+bool                  g_haveKeyMaps = false;     // some seat has a learned key or HID button
+bool                  g_held[kMaxSeats][kMaxLearned] = {};   // pressed and not yet released
+constexpr UINT_PTR    kLearnTimer = 5;
+constexpr wchar_t     kSettingsClassName[] = L"openMouse.Settings";
+
 // ---------------------------------------------------------------- cursor
 //
 // Windows keeps moving the single hardware cursor for every physical mouse
@@ -849,6 +872,276 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
     if (flags & RI_MOUSE_HWHEEL)             { SendMouseAt(p, MOUSEEVENTF_HWHEEL, (DWORD)(SHORT)data); }
 }
 
+// ---------------------------------------------------------------- learn / play
+
+constexpr USHORT kStdDownBits = RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_RIGHT_BUTTON_DOWN |
+                                RI_MOUSE_MIDDLE_BUTTON_DOWN | RI_MOUSE_BUTTON_4_DOWN |
+                                RI_MOUSE_BUTTON_5_DOWN;
+constexpr USHORT kWheelBits   = RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL;
+// Everything the raw mouse flags define; a bit outside it is a button Windows
+// has no name for.
+constexpr USHORT kKnownBits   = 0x03FF | kWheelBits;
+
+// A shortcut as one SendInput call: the modifiers down, the key, then all up.
+void SendHotkey(UINT mods, UINT vk) {
+    if (!vk || !InjectAllowed()) return;
+    INPUT in[12]{};
+    int n = 0;
+    auto add = [&](UINT v, bool up) {
+        in[n].type           = INPUT_KEYBOARD;
+        in[n].ki.wVk         = (WORD)v;
+        in[n].ki.wScan       = (WORD)MapVirtualKeyW(v, MAPVK_VK_TO_VSC);
+        in[n].ki.dwFlags     = (up ? KEYEVENTF_KEYUP : 0) | (IsExtendedVk(v) ? KEYEVENTF_EXTENDEDKEY : 0);
+        in[n].ki.dwExtraInfo = kInjectTag;
+        ++n;
+    };
+    const UINT modVk[4] = { VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN };
+    const UINT bits[4]  = { kModCtrl, kModAlt, kModShift, kModWin };
+    for (int i = 0; i < 4; ++i) if (mods & bits[i]) add(modVk[i], false);
+    add(vk, false);
+    add(vk, true);
+    for (int i = 3; i >= 0; --i) if (mods & bits[i]) add(modVk[i], true);
+    SendInput((UINT)n, in, sizeof(INPUT));
+}
+
+USHORT ActionFlags(int action, bool down) {
+    switch (action) {
+    case kActLeft:    return down ? RI_MOUSE_LEFT_BUTTON_DOWN   : RI_MOUSE_LEFT_BUTTON_UP;
+    case kActRight:   return down ? RI_MOUSE_RIGHT_BUTTON_DOWN  : RI_MOUSE_RIGHT_BUTTON_UP;
+    case kActMiddle:  return down ? RI_MOUSE_MIDDLE_BUTTON_DOWN : RI_MOUSE_MIDDLE_BUTTON_UP;
+    case kActBack:    return down ? RI_MOUSE_BUTTON_4_DOWN      : RI_MOUSE_BUTTON_4_UP;
+    case kActForward: return down ? RI_MOUSE_BUTTON_5_DOWN      : RI_MOUSE_BUTTON_5_UP;
+    }
+    return 0;
+}
+
+// Plays the action of learned button idx of a seat, as a press or a release.
+// Presses and releases come in pairs: a release without its press (a reload
+// between the two, a repeat) is dropped, so no button is left held down.
+// Clicks go through HandleButton, as if the seat's own mouse had made them: at
+// the seat's pointer, with the ownership and drag rules that come with it.
+void RunMapped(int seat, int idx, bool down) {
+    if (seat < 0 || seat >= kMaxSeats || idx < 0 || idx >= kMaxLearned) return;
+    if (idx >= (int)g_cfg.buttons[seat].size()) return;
+    bool& held = g_held[seat][idx];
+    if (down == held) return;
+    held = down;
+
+    const ButtonMap& b = g_cfg.buttons[seat][idx];
+    if (b.action == kActKeys) {
+        if (down) SendHotkey(b.mods, b.vk);
+        return;
+    }
+    const USHORT f = ActionFlags(b.action, down);
+    if (!f) return;
+    if (g_verbose) LogLine(L"[button] seat %d %s %s", seat, b.sig.c_str(), down ? L"down" : L"up");
+    FlushPointers();
+    HandleButton(seat, f, 0);
+}
+
+void ReleaseHeldButtons() {
+    for (int s = 0; s < kMaxSeats; ++s)
+        for (int i = 0; i < kMaxLearned; ++i)
+            if (g_held[s][i]) RunMapped(s, i, false);
+}
+
+void RefreshMapFlags() {
+    g_haveKeyMaps = false;
+    for (int s = 0; s < kMaxSeats; ++s)
+        for (const ButtonMap& b : g_cfg.buttons[s])
+            if (b.kind == L'k' || b.kind == L'h') g_haveKeyMaps = true;
+}
+
+// ---- listening
+
+void NotifyLearn(int seat, LPARAM result) {
+    if (HWND w = FindWindowW(kSettingsClassName, nullptr))
+        PostMessageW(w, kLearnedMsg, (WPARAM)seat, result);
+}
+
+void StopLearn() {
+    g_learnSeat = -1;
+    KillTimer(g_hwnd, kLearnTimer);
+}
+
+void StartLearn(int seat) {
+    StopLearn();
+    if (seat < 0 || seat >= g_cfg.seatCount || seat >= kMaxSeats) return;
+    if (!g_seatPresent[seat]) {
+        LogLine(L"[learn] seat %d : mouse not plugged in", seat);
+        NotifyLearn(seat, kLearnAbsent);
+        return;
+    }
+    g_learnSeat  = seat;
+    g_learnArmAt = GetTickCount() + 500;   // the click on "learn" is still being released
+    SetTimer(g_hwnd, kLearnTimer, kLearnListenMs, nullptr);
+    LogLine(L"[learn] seat %d : listening for %lu ms", seat, kLearnListenMs);
+}
+
+void FinishLearn(int seat, const std::wstring& sig, const std::wstring& label) {
+    StopLearn();
+    if (!WriteLearnResult(seat, sig, label)) {
+        LogLine(L"[learn] seat %d : could not write the result", seat);
+        NotifyLearn(seat, kLearnNothing);
+        return;
+    }
+    LogLine(L"[learn] seat %d heard %s", seat, sig.c_str());
+    NotifyLearn(seat, kLearnHeard);
+}
+
+bool LearnArmed() { return (int)(GetTickCount() - g_learnArmAt) >= 0; }
+
+std::wstring HexString(const BYTE* p, size_t n) {
+    std::wstring s;
+    wchar_t two[4];
+    for (size_t i = 0; i < n; ++i) { swprintf(two, 4, L"%02X", p[i]); s += two; }
+    return s;
+}
+
+std::wstring MouseBitLabel(USHORT bit) {
+    const bool fr = UiFrench();
+    switch (bit) {
+    case RI_MOUSE_LEFT_BUTTON_DOWN:   return fr ? L"Bouton gauche"        : L"Left button";
+    case RI_MOUSE_RIGHT_BUTTON_DOWN:  return fr ? L"Bouton droit"         : L"Right button";
+    case RI_MOUSE_MIDDLE_BUTTON_DOWN: return fr ? L"Bouton du milieu"     : L"Middle button";
+    case RI_MOUSE_BUTTON_4_DOWN:      return fr ? L"Bouton précédent (4)" : L"Back button (4)";
+    case RI_MOUSE_BUTTON_5_DOWN:      return fr ? L"Bouton suivant (5)"   : L"Forward button (5)";
+    }
+    wchar_t buf[64];
+    swprintf(buf, 64, fr ? L"Bouton spécial (0x%X)" : L"Special button (0x%X)", bit);
+    return buf;
+}
+
+// Keys that do not type. A keyboard interface of a mouse may be shared with a
+// real keyboard (one radio receiver for both): learning only these keeps what
+// is typed out of anything this program retains.
+bool LearnableKey(USHORT scan, bool e0) {
+    if (scan == 0 || scan >= 0xFF) return false;
+    if (e0) return scan != 0x1C && scan != 0x35 && scan != 0x2A && scan != 0x36;   // pad Enter, pad /, fake shifts
+    if (scan == 0x01 || scan == 0x1D || scan == 0x2A || scan == 0x36 || scan == 0x38) return true;   // Esc, Ctrl, Shift, Alt
+    if (scan >= 0x3B && scan <= 0x44) return true;   // F1-F10
+    if (scan == 0x57 || scan == 0x58) return true;   // F11, F12
+    if (scan >= 0x64 && scan <= 0x6E) return true;   // F13-F23
+    return scan == 0x76;                             // F24
+}
+
+// A press of the mouse being listened to. Returns the flags without the
+// presses: while listening they act on nothing, they are only heard.
+USHORT LearnFromMouse(int seat, USHORT flags) {
+    const USHORT presses = flags & (kStdDownBits | (USHORT)~kKnownBits);
+    if (!presses) return flags;
+    if (LearnArmed()) {
+        const USHORT bit = presses & (USHORT)(0 - presses);   // the lowest
+        wchar_t sig[16];
+        swprintf(sig, 16, L"m:%X", bit);
+        FinishLearn(seat, sig, MouseBitLabel(bit));
+    }
+    return flags & (USHORT)~presses;
+}
+
+// A key of a mouse's own keyboard interface.
+void OnMouseKeyboardInterface(HANDLE dev, USHORT scan, bool e0, bool up) {
+    if (g_learnSeat < 0 && !g_haveKeyMaps) return;
+    const auto owner = g_ownerSeat.find(dev);
+    if (owner == g_ownerSeat.end()) return;       // not a mouse's own interface: never looked at
+    const int seat = owner->second;
+    const UINT code = scan | (e0 ? 0x100u : 0u);
+
+    if (g_learnSeat == seat) {
+        if (up || !LearnArmed() || !LearnableKey(scan, e0)) return;
+        wchar_t sig[16], name[64] = L"";
+        swprintf(sig, 16, L"k:%X", code);
+        GetKeyNameTextW((LONG)(((UINT)scan << 16) | (e0 ? (1u << 24) : 0u)), name, 64);
+        wchar_t label[128];
+        swprintf(label, 128, UiFrench() ? L"Touche « %s » de la souris" : L"Mouse key \"%s\"", name);
+        FinishLearn(seat, sig, label);
+        return;
+    }
+    if (g_learnSeat >= 0) return;
+    for (int i = 0; i < (int)g_cfg.buttons[seat].size(); ++i) {
+        const ButtonMap& b = g_cfg.buttons[seat][i];
+        if (b.kind == L'k' && b.code == code) RunMapped(seat, i, !up);
+    }
+}
+
+bool AllZero(const BYTE* p, size_t n) {
+    for (size_t i = 0; i < n; ++i) if (p[i]) return false;
+    return true;
+}
+
+// Whether a report says "something is pressed". The first byte of a report is
+// its id when the collection has several (always so for the media and
+// manufacturer collections of a mouse, which share one interface), so it says
+// nothing: a report of an id and zeros is a release. Only a one-byte report is
+// all data.
+bool IsPressReport(const BYTE* p, size_t n) {
+    return n == 1 ? p[0] != 0 : !AllZero(p + 1, n - 1);
+}
+
+// One report of a mouse's media, system or manufacturer collection.
+void OnMouseHidReport(HANDLE dev, int seat, const BYTE* p, size_t n) {
+    const auto pg = g_hidPage.find(dev);
+    if (pg == g_hidPage.end() || n == 0 || n > 64) return;
+    const USHORT page = pg->second;
+
+    if (g_learnSeat == seat) {
+        if (!LearnArmed() || !IsPressReport(p, n)) return;
+        wchar_t head[16];
+        swprintf(head, 16, L"h%X:", page);
+        const std::wstring hex = HexString(p, n);
+        const bool fr = UiFrench();
+        const wchar_t* what = page == 0x0C   ? (fr ? L"Touche multimédia" : L"Media key")
+                            : page == 0xFF00 ? (fr ? L"Bouton du fabricant" : L"Manufacturer button")
+                                             : (fr ? L"Commande système" : L"System control");
+        FinishLearn(seat, std::wstring(head) + hex, std::wstring(what) + L" " + hex.substr(0, 16));
+        return;
+    }
+    if (g_learnSeat >= 0) return;
+    for (int i = 0; i < (int)g_cfg.buttons[seat].size(); ++i) {
+        const ButtonMap& b = g_cfg.buttons[seat][i];
+        if (b.kind != L'h' || b.page != page || b.report.size() != n) continue;
+        if (!memcmp(b.report.data(), p, n))
+            RunMapped(seat, i, true);
+        // Released: the same kind of report with nothing pressed. Its first byte
+        // is the report id (kept) or the only data byte (then zero).
+        else if (g_held[seat][i] && (p[0] == 0 || p[0] == b.report[0]) && AllZero(p + 1, n - 1))
+            RunMapped(seat, i, false);
+    }
+}
+
+void OnRawHid(HANDLE dev, const RAWHID& h) {
+    if (g_learnSeat < 0 && !g_haveKeyMaps) return;
+    const auto owner = g_ownerSeat.find(dev);
+    if (owner == g_ownerSeat.end() || h.dwSizeHid == 0) return;
+    const BYTE* p = h.bRawData;
+    for (DWORD c = 0; c < h.dwCount; ++c, p += h.dwSizeHid)
+        OnMouseHidReport(dev, owner->second, p, h.dwSizeHid);
+}
+
+// Replaces the relay of the mouse buttons that have been learned: the action
+// chosen for them is played instead. Returns the flags left for the usual relay.
+USHORT RemapMouseButtons(int seat, USHORT flags) {
+    const auto& list = g_cfg.buttons[seat];
+    for (int i = 0; i < (int)list.size(); ++i) {
+        const ButtonMap& b = list[i];
+        if (b.kind != L'm') continue;
+        const USHORT down = (USHORT)b.code;
+        if (flags & down) {
+            RunMapped(seat, i, true);
+            if (!(down & kStdDownBits)) RunMapped(seat, i, false);   // no release exists: a click
+            flags &= (USHORT)~down;
+        }
+        const USHORT up = (down & kStdDownBits) ? (USHORT)(down << 1) : 0;
+        // A release whose press was not ours (made before the button was
+        // learned) goes on to the usual relay, which knows how to end it.
+        if (up && (flags & up) && g_held[seat][i]) {
+            RunMapped(seat, i, false);
+            flags &= (USHORT)~up;
+        }
+    }
+    return flags;
+}
+
 // ---------------------------------------------------------------- raw input
 
 void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
@@ -902,7 +1195,14 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
                     GetTickCount());
         // Buttons act on positions: bring every pointer up to date first.
         FlushPointers();
-        HandleButton(seat, m.usButtonFlags, m.usButtonData);
+
+        // Learned buttons: listened to while the settings window asks for it,
+        // replaced by their chosen action otherwise. What is left goes on to
+        // the usual relay.
+        USHORT flags = m.usButtonFlags;
+        if (g_learnSeat == seat) flags = LearnFromMouse(seat, flags);
+        flags = RemapMouseButtons(seat, flags);
+        if (flags) HandleButton(seat, flags, m.usButtonData);
     }
 
     // RIDEV_NOLEGACY does NOT stop Windows moving the single hardware cursor
@@ -933,6 +1233,10 @@ void OnRawKeyboard(HANDLE dev, const RAWKEYBOARD& k) {
     const USHORT scan = k.MakeCode;
     const bool   up   = (k.Flags & RI_KEY_BREAK) != 0;
     if (scan >= 512) return;
+
+    // A key of a mouse's own keyboard interface may be a learned button. A real
+    // keyboard is not in the table that call looks in: it returns at once.
+    OnMouseKeyboardInterface(dev, scan, (k.Flags & RI_KEY_E0) != 0, up);
 
     auto it = g_keyboardSeat.find(dev);
     int seat = (it != g_keyboardSeat.end()) ? it->second : 0;
@@ -996,6 +1300,7 @@ void OnRawInput(HRAWINPUT h) {
     auto* ri = reinterpret_cast<RAWINPUT*>(stack);
     if (ri->header.dwType == RIM_TYPEMOUSE)         { ++g_rawMouse; OnRawMouse(ri->header.hDevice, ri->data.mouse); }
     else if (ri->header.dwType == RIM_TYPEKEYBOARD) { ++g_rawKbd;   OnRawKeyboard(ri->header.hDevice, ri->data.keyboard); }
+    else if (ri->header.dwType == RIM_TYPEHID)      { OnRawHid(ri->header.hDevice, ri->data.hid); }
 }
 
 // ---------------------------------------------------------------- gate
@@ -1152,6 +1457,18 @@ bool RegisterCapture(HWND hwnd, bool keyboards) {
         LogLine(L"[error] RegisterRawInputDevices failed: %lu", GetLastError());
         return false;
     }
+
+    // The other collections a mouse exposes (media keys, system controls, the
+    // manufacturer's own page), observe-only, for learned buttons. They are only
+    // ever looked at when the device is a mouse's own interface (g_ownerSeat).
+    // Failing here costs the learning of those buttons, not the pointers.
+    RAWINPUTDEVICE hid[3] = {};
+    hid[0] = { 0x0C,   0,    RIDEV_INPUTSINK | RIDEV_PAGEONLY, hwnd };   // consumer / media
+    hid[1] = { 0x01,   0x80, RIDEV_INPUTSINK,                  hwnd };   // system control
+    hid[2] = { 0xFF00, 0,    RIDEV_INPUTSINK | RIDEV_PAGEONLY, hwnd };   // manufacturer
+    if (!RegisterRawInputDevices(hid, 3, sizeof(RAWINPUTDEVICE)))
+        LogLine(L"[warn] media / manufacturer collections not registered: %lu — those buttons cannot be learned",
+                GetLastError());
     g_keyboardRouting = keyboards;
     g_captureActive   = true;
     return true;
@@ -1165,6 +1482,11 @@ void UnregisterCapture() {
     rid[1].usUsagePage = 0x01; rid[1].usUsage = 0x06;
     rid[1].dwFlags = RIDEV_REMOVE; rid[1].hwndTarget = nullptr;
     RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE));
+    RAWINPUTDEVICE hid[3] = {};
+    hid[0] = { 0x0C,   0,    RIDEV_REMOVE | RIDEV_PAGEONLY, nullptr };
+    hid[1] = { 0x01,   0x80, RIDEV_REMOVE,                  nullptr };
+    hid[2] = { 0xFF00, 0,    RIDEV_REMOVE | RIDEV_PAGEONLY, nullptr };
+    for (const RAWINPUTDEVICE& r : hid) RegisterRawInputDevices(const_cast<RAWINPUTDEVICE*>(&r), 1, sizeof(RAWINPUTDEVICE));
     g_keyboardRouting = false;
     g_captureActive   = false;
     // Every exit path funnels through here; a cage left behind would trap
@@ -1371,6 +1693,23 @@ void SeatNewMice(const std::vector<DeviceInfo>& devices,
         LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
 }
 
+// The seat whose mouse a keyboard or HID interface belongs to: the one whose
+// bound mouse has the same hardware id. -1 when there is none, when two seats'
+// mice share that id (which of the two pressed cannot be told), or when the ini
+// binds the interface itself to a seat as a keyboard (a real one).
+int OwnerSeatOf(const std::wstring& path) {
+    if (g_cfg.keyboardBinding.count(path)) return -1;
+    const std::wstring base = HardwareBase(path);
+    if (base.empty()) return -1;
+    int seat = -1;
+    for (const auto& kv : g_cfg.mouseBinding) {
+        if (HardwareBase(kv.first) != base) continue;
+        if (seat >= 0 && seat != kv.second) return -1;
+        seat = kv.second;
+    }
+    return seat;
+}
+
 // The laptop touchpad is seated by rule, not as a mouse, so that there are
 // always two arrows to work with:
 //   - no external mouse : the touchpad alone;
@@ -1549,6 +1888,24 @@ void ApplyBindings() {
     for (bool& p : g_seatPresent) p = false;
     for (const auto& kv : g_mouseSeat)
         if (kv.second >= 0 && kv.second < kMaxSeats) g_seatPresent[kv.second] = true;
+
+    // The keyboard and HID interfaces that belong to a seat's mouse: same
+    // hardware id as a mouse bound to the seat. Two mice of one model share it,
+    // and then which of them pressed a media key cannot be told: those
+    // interfaces belong to no seat. A keyboard the ini binds to a seat is a
+    // real one and is never taken for a mouse's.
+    g_ownerSeat.clear();
+    g_hidPage.clear();
+    auto own = [&](const DeviceInfo& d) {
+        const int seat = OwnerSeatOf(d.path);
+        if (seat < 0) return;
+        g_ownerSeat[d.handle] = seat;
+        if (d.type == RIM_TYPEHID) g_hidPage[d.handle] = d.page;
+    };
+    for (const auto& d : devices)
+        if (d.type == RIM_TYPEKEYBOARD) own(d);
+    for (const auto& d : EnumerateHidDevices()) own(d);
+    RefreshMapFlags();
 }
 
 // The mice that are plugged in, and the touchpad rule, applied to the seats.
@@ -1587,6 +1944,10 @@ void ReloadSettings() {
     const bool padChanged = g_cfg.touchpad != fresh.touchpad;
     g_cfg.touchpad    = fresh.touchpad;
     g_cfg.screen      = fresh.screen;
+    // Learned buttons: end what the old table holds down, then swap.
+    ReleaseHeldButtons();
+    g_cfg.buttons     = fresh.buttons;
+    RefreshMapFlags();
     ResolveSeatBounds();
     ReclampSeats();
     for (auto& a : g_accel) a = AccelState{};
@@ -1712,6 +2073,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ReloadSettings();
         return 0;
 
+    case kLearnMsg:
+        // The settings window asks to listen to one mouse (wParam = seat + 1),
+        // or to stop (0).
+        if (wp == 0) StopLearn();
+        else         StartLearn((int)wp - 1);
+        return 0;
+
     case WM_DISPLAYCHANGE:
         // A screen came or went: an enclosed seat follows it, or roams free.
         ResolveSeatBounds();
@@ -1742,6 +2110,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SetTimer(hwnd, kMenuSettleTimer, kMenuStageDelay[g_menuStage], nullptr);
             else
                 KillTimer(hwnd, kMenuSettleTimer);
+            return 0;
+        }
+        if (wp == kLearnTimer) {            // nothing was heard in time
+            const int seat = g_learnSeat;
+            StopLearn();
+            if (seat >= 0) {
+                LogLine(L"[learn] seat %d : nothing heard", seat);
+                NotifyLearn(seat, kLearnNothing);
+            }
             return 0;
         }
         if (wp == 2) {                      // auto-exit timer
@@ -1879,12 +2256,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int RunList() {
     const auto devices = EnumerateDevices();
+    g_cfg.Load(Config::DefaultPath());
     LogLine(L"openMouse — input devices");
     LogLine(L"");
     for (const auto& d : devices) {
         LogLine(L"  %s  %s", d.type == RIM_TYPEMOUSE ? L"[mouse]   " : L"[keyboard]",
                 d.friendlyName.c_str());
         LogLine(L"      %s", d.path.c_str());
+        if (d.type == RIM_TYPEKEYBOARD && OwnerSeatOf(d.path) >= 0)
+            LogLine(L"      interface of the mouse of seat %d (its buttons can be learned)", OwnerSeatOf(d.path));
+    }
+    // The media, system and manufacturer collections of the mice: what a
+    // learned button can come from besides the five buttons of the mouse itself.
+    for (const auto& d : EnumerateHidDevices()) {
+        if (OwnerSeatOf(d.path) < 0) continue;
+        LogLine(L"  [hid]       usage page %04X  %s", d.page, d.friendlyName.c_str());
+        LogLine(L"      %s", d.path.c_str());
+        LogLine(L"      interface of the mouse of seat %d (its buttons can be learned)", OwnerSeatOf(d.path));
     }
     LogLine(L"");
     LogLine(L"Config file: %s", Config::DefaultPath().c_str());
@@ -2760,6 +3148,7 @@ int RunMain(HINSTANCE inst) {
     // elevated; let its reload request through the privilege filter. All it
     // does is make us re-read a file that window could write anyway.
     ChangeWindowMessageFilterEx(g_hwnd, kReloadSettingsMsg, MSGFLT_ALLOW, nullptr);
+    ChangeWindowMessageFilterEx(g_hwnd, kLearnMsg, MSGFLT_ALLOW, nullptr);
 
     ApplyBindings();
     ResolveSeatBounds();

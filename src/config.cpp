@@ -62,7 +62,49 @@ bool WriteFileUtf8(const std::wstring& path, const std::wstring& text) {
     return written == raw.size();
 }
 
+unsigned long HexOf(const std::wstring& s, bool* ok) {
+    wchar_t* end = nullptr;
+    const unsigned long v = wcstoul(s.c_str(), &end, 16);
+    if (ok) *ok = !s.empty() && end && *end == L'\0';
+    return v;
+}
+
 } // namespace
+
+bool ButtonMap::Parse() {
+    kind = 0; code = 0; page = 0; report.clear();
+    if (sig.size() < 3) return false;
+    bool ok = false;
+    if (sig[0] == L'm' && sig[1] == L':') {
+        code = (UINT)HexOf(sig.substr(2), &ok);
+        if (!ok || code == 0 || (code & (code - 1))) return false;   // one bit
+        kind = L'm';
+        return true;
+    }
+    if (sig[0] == L'k' && sig[1] == L':') {
+        code = (UINT)HexOf(sig.substr(2), &ok);
+        if (!ok || (code & 0xFF) == 0 || code > 0x1FF) return false;
+        kind = L'k';
+        return true;
+    }
+    if (sig[0] == L'h') {
+        const size_t colon = sig.find(L':');
+        if (colon == std::wstring::npos || colon < 2) return false;
+        const unsigned long p = HexOf(sig.substr(1, colon - 1), &ok);
+        if (!ok || p == 0 || p > 0xFFFF) return false;
+        const std::wstring bytes = sig.substr(colon + 1);
+        if (bytes.empty() || bytes.size() % 2 || bytes.size() > 128) return false;
+        for (size_t i = 0; i < bytes.size(); i += 2) {
+            const unsigned long b = HexOf(bytes.substr(i, 2), &ok);
+            if (!ok) return false;
+            report.push_back((BYTE)b);
+        }
+        page = (USHORT)p;
+        kind = L'h';
+        return true;
+    }
+    return false;
+}
 
 std::wstring Config::DefaultPath() {
     wchar_t* appdata = nullptr;
@@ -182,6 +224,32 @@ bool Config::Load(const std::wstring& path) {
                 else if (key == L"accel_fast")  { accel[idx].on = true; accel[idx].fast  = _wtof(val.c_str()); }
                 else if (key == L"accel_speed") { accel[idx].on = true; accel[idx].speed = _wtof(val.c_str()); }
                 else if (key == L"screen") screen[idx] = val;
+                else if (key == L"button") {
+                    // sig|action|mods:vk|label  (the label may be missing)
+                    std::vector<std::wstring> f;
+                    size_t from = 0;
+                    for (int n = 0; n < 3; ++n) {
+                        const size_t bar = val.find(L'|', from);
+                        if (bar == std::wstring::npos) break;
+                        f.push_back(val.substr(from, bar - from));
+                        from = bar + 1;
+                    }
+                    f.push_back(val.substr(from));
+                    if (f.size() >= 3 && (int)buttons[idx].size() < kMaxLearned) {
+                        ButtonMap b;
+                        b.sig    = f[0];
+                        b.action = _wtoi(f[1].c_str());
+                        const size_t colon = f[2].find(L':');
+                        if (colon != std::wstring::npos) {
+                            b.mods = (UINT)wcstoul(f[2].c_str(), nullptr, 16);
+                            b.vk   = (UINT)wcstoul(f[2].c_str() + colon + 1, nullptr, 16);
+                        }
+                        b.label = f.size() >= 4 ? f[3] : L"";
+                        if (b.action < 0 || b.action >= kActCount) b.action = kActNone;
+                        if (b.action == kActKeys && b.vk == 0) b.action = kActNone;
+                        if (b.Parse()) buttons[idx].push_back(std::move(b));
+                    }
+                }
                 else if (key == L"color") {
                     const unsigned long v = wcstoul(val.c_str(), nullptr, 16);
                     seatColors[idx] = RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
@@ -225,6 +293,17 @@ bool Config::Save(const std::wstring& path) const {
             t.resize(t.size() - 1);
             t += L"screen=" + screen[i] + L"\n\n";
         }
+        if (i < (int)buttons.size() && !buttons[i].empty()) {
+            t.resize(t.size() - 1);
+            for (const ButtonMap& b : buttons[i]) {
+                std::wstring label = b.label;
+                for (wchar_t& ch : label) if (ch == L'|' || ch == L'\n' || ch == L'\r') ch = L' ';
+                wchar_t head[64];
+                swprintf(head, 64, L"|%d|%X:%X|", b.action, b.mods, b.vk);
+                t += L"button=" + b.sig + head + label + L"\n";
+            }
+            t += L"\n";
+        }
     }
 
     t += L"[mouse]\n";
@@ -235,6 +314,43 @@ bool Config::Save(const std::wstring& path) const {
         t += kv.first + L"=" + std::to_wstring(kv.second) + L"\n";
 
     return WriteFileUtf8(path, t);
+}
+
+// ---------------------------------------------------------------- learn file
+
+namespace {
+
+std::wstring LearnPath() {
+    std::wstring p = Config::DefaultPath();
+    const size_t slash = p.rfind(L'\\');
+    return (slash == std::wstring::npos) ? std::wstring(L"openmouse.learn")
+                                         : p.substr(0, slash + 1) + L"openmouse.learn";
+}
+
+} // namespace
+
+// Three lines: seat, signature, label. Written by the engine, read once (and
+// removed) by the settings window the engine then wakes.
+bool WriteLearnResult(int seat, const std::wstring& sig, const std::wstring& label) {
+    std::wstring clean = label;
+    for (wchar_t& c : clean) if (c == L'\n' || c == L'\r') c = L' ';
+    return WriteFileUtf8(LearnPath(), std::to_wstring(seat) + L"\n" + sig + L"\n" + clean + L"\n");
+}
+
+bool ReadLearnResult(int& seat, std::wstring& sig, std::wstring& label) {
+    const std::wstring path = LearnPath();
+    const std::wstring text = ReadFileUtf16(path);
+    DeleteFileW(path.c_str());
+    if (text.empty()) return false;
+    const size_t a = text.find(L'\n');
+    if (a == std::wstring::npos) return false;
+    const size_t b = text.find(L'\n', a + 1);
+    if (b == std::wstring::npos) return false;
+    const size_t c = text.find(L'\n', b + 1);
+    seat  = _wtoi(Trim(text.substr(0, a)).c_str());
+    sig   = Trim(text.substr(a + 1, b - a - 1));
+    label = Trim(text.substr(b + 1, c == std::wstring::npos ? std::wstring::npos : c - b - 1));
+    return !sig.empty();
 }
 
 // ---------------------------------------------------------------- logging
