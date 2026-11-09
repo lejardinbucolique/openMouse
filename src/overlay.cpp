@@ -61,8 +61,8 @@ void EnsureClass(HINSTANCE inst) {
 //
 // GetDIBits is used rather than DrawIconEx because GDI does not reliably carry
 // the alpha channel through a blit, and the alpha is the whole point here.
-bool CursorOverlay::RenderFromSystemCursor(COLORREF color, std::vector<BYTE>& out) {
-    HCURSOR hc = (HCURSOR)LoadImageW(nullptr, IDC_ARROW, IMAGE_CURSOR, 0, 0,
+bool CursorOverlay::RenderFromSystemCursor(COLORREF color, LPCWSTR id, std::vector<BYTE>& out) {
+    HCURSOR hc = (HCURSOR)LoadImageW(nullptr, id, IMAGE_CURSOR, 0, 0,
                                      LR_SHARED | LR_DEFAULTSIZE);
     if (!hc) return false;
 
@@ -194,37 +194,77 @@ bool CursorOverlay::Create(HINSTANCE inst, int seatIndex, COLORREF color) {
     return true;
 }
 
+static LPCWSTR ShapeCursorId(PointerShape shape) {
+    switch (shape) {
+    case PointerShape::SizeWE:   return IDC_SIZEWE;
+    case PointerShape::SizeNS:   return IDC_SIZENS;
+    case PointerShape::SizeNWSE: return IDC_SIZENWSE;
+    case PointerShape::SizeNESW: return IDC_SIZENESW;
+    default:                     return IDC_ARROW;
+    }
+}
+
 void CursorOverlay::Render(COLORREF color) {
-    // Prefer the real system arrow; the hand-drawn polygon is only a fallback
-    // for machines where the cursor cannot be read back with usable alpha.
-    std::vector<BYTE> pixels;
-    if (!RenderFromSystemCursor(color, pixels))
-        RenderFallbackArrow(color, pixels);
+    color_ = color;
+    Present(PointerShape::Arrow);
+}
 
-    if (w_ <= 0 || h_ <= 0 || pixels.size() != (size_t)w_ * h_ * 4) return;
+// Builds (once) and shows the bitmap of a shape. Every shape comes from the
+// real system cursor, so the resize arrows have the native look and hotspot —
+// the size cursors' hotspot is their centre, not a corner, which is why the
+// position is always placed through hotX_/hotY_ of the shape on display.
+void CursorOverlay::Present(PointerShape shape) {
+    ShapeBmp* sb = &shapes_[(int)shape];
+    if (!sb->bmp) {
+        // Prefer the real system cursor; the hand-drawn polygon is only a
+        // fallback for the arrow, on machines where the cursor cannot be read
+        // back with usable alpha.
+        std::vector<BYTE> pixels;
+        bool ok = RenderFromSystemCursor(color_, ShapeCursorId(shape), pixels);
+        if (!ok && shape == PointerShape::Arrow) {
+            RenderFallbackArrow(color_, pixels);
+            ok = true;
+        }
+        if (!ok || w_ <= 0 || h_ <= 0 || pixels.size() != (size_t)w_ * h_ * 4) {
+            // No usable resize cursor: stay on the arrow rather than show nothing.
+            if (shape != PointerShape::Arrow) Present(PointerShape::Arrow);
+            return;
+        }
 
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth       = w_;
-    bi.bmiHeader.biHeight      = -h_;          // top-down
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth       = w_;
+        bi.bmiHeader.biHeight      = -h_;          // top-down
+        bi.bmiHeader.biPlanes      = 1;
+        bi.bmiHeader.biBitCount    = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
 
-    void* bits = nullptr;
-    HDC screen = GetDC(nullptr);
-    bitmap_ = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bitmap_ || !bits) { ReleaseDC(nullptr, screen); return; }
+        void* bits = nullptr;
+        HDC screen = GetDC(nullptr);
+        HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        ReleaseDC(nullptr, screen);
+        if (!bmp || !bits) {
+            if (bmp) DeleteObject(bmp);
+            if (shape != PointerShape::Arrow) Present(PointerShape::Arrow);
+            return;
+        }
+        memcpy(bits, pixels.data(), pixels.size());
+        sb->bmp = bmp; sb->w = w_; sb->h = h_; sb->hotX = hotX_; sb->hotY = hotY_;
+    }
 
-    memcpy(bits, pixels.data(), pixels.size());
+    w_ = sb->w; h_ = sb->h; hotX_ = sb->hotX; hotY_ = sb->hotY;
+    bitmap_ = sb->bmp;
+    shape_  = shape;
 
     // The window was created at the fallback size; the system cursor may be
     // larger, so resize before the layered update or the arrow is clipped.
     SetWindowPos(hwnd_, nullptr, 0, 0, w_, h_, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 
+    HDC screen = GetDC(nullptr);
     HDC mem = CreateCompatibleDC(screen);
     HGDIOBJ old = SelectObject(mem, bitmap_);
 
+    POINT  dst{at_.x - hotX_, at_.y - hotY_};
     POINT  src{0, 0};
     SIZE   size{w_, h_};
     BLENDFUNCTION bf{};
@@ -232,15 +272,21 @@ void CursorOverlay::Render(COLORREF color) {
     bf.SourceConstantAlpha = 255;
     bf.AlphaFormat         = AC_SRC_ALPHA;
 
-    UpdateLayeredWindow(hwnd_, screen, nullptr, &size, mem, &src, 0, &bf, ULW_ALPHA);
+    UpdateLayeredWindow(hwnd_, screen, &dst, &size, mem, &src, 0, &bf, ULW_ALPHA);
 
     SelectObject(mem, old);
     DeleteDC(mem);
     ReleaseDC(nullptr, screen);
 }
 
+void CursorOverlay::SetShape(PointerShape shape) {
+    if (!hwnd_ || shape == shape_) return;
+    Present(shape);
+}
+
 void CursorOverlay::MoveTo(POINT ptVirtual) {
     if (!hwnd_) return;
+    at_ = ptVirtual;
     // Offset by the real hotspot so the tip lands on the logical position.
     // UpdateLayeredWindow with only a destination point moves the layered
     // window without touching its content or z-order, which is far cheaper
@@ -291,7 +337,9 @@ void CursorOverlay::Show(bool visible) {
 }
 
 void CursorOverlay::Destroy() {
-    if (bitmap_) { DeleteObject(bitmap_); bitmap_ = nullptr; }
+    bitmap_ = nullptr;
+    for (ShapeBmp& sb : shapes_) { if (sb.bmp) DeleteObject(sb.bmp); sb = ShapeBmp(); }
+    shape_ = PointerShape::Arrow;
     if (hwnd_)   { DestroyWindow(hwnd_);  hwnd_ = nullptr; }
     visible_ = false;
 }

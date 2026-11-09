@@ -128,9 +128,14 @@ struct Config {
 
 // One transparent, click-through, always-on-top window per seat, used to draw
 // that seat's pointer when it does not own the real system cursor.
+// What the arrow looks like: the plain arrow, or the system's resize arrows
+// when the pointer rests on a window border or corner that can be grabbed.
+enum class PointerShape { Arrow, SizeWE, SizeNS, SizeNWSE, SizeNESW };
+
 class CursorOverlay {
 public:
     bool Create(HINSTANCE inst, int seatIndex, COLORREF color);
+    void SetShape(PointerShape shape);
     void Destroy();
     void MoveTo(POINT ptVirtual);
     void Show(bool visible);
@@ -142,7 +147,8 @@ public:
 
 private:
     void Render(COLORREF color);
-    bool RenderFromSystemCursor(COLORREF color, std::vector<BYTE>& out);
+    void Present(PointerShape shape);
+    bool RenderFromSystemCursor(COLORREF color, LPCWSTR id, std::vector<BYTE>& out);
     void RenderFallbackArrow(COLORREF color, std::vector<BYTE>& out);
 
     HWND     hwnd_    = nullptr;
@@ -150,6 +156,15 @@ private:
     int      w_ = 0, h_ = 0;
     int      hotX_ = 1, hotY_ = 1;   // from the system cursor when available
     bool     visible_ = false;
+
+    // One rendered bitmap per shape, built on first use, so a shape change on
+    // the move path is a bitmap swap and not a rebuild.
+    struct ShapeBmp { HBITMAP bmp = nullptr; int w = 0, h = 0, hotX = 1, hotY = 1; };
+    static constexpr int kShapes = 5;
+    ShapeBmp     shapes_[kShapes];
+    PointerShape shape_ = PointerShape::Arrow;
+    COLORREF     color_ = 0;
+    POINT        at_{ 0, 0 };        // last logical position, to re-place the arrow on a shape swap
 };
 
 // ---------------------------------------------------------------- utilities

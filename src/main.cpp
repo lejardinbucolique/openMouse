@@ -400,6 +400,8 @@ void SetActiveSeat(int seat) {
 bool  g_dirty[kMaxSeats] = {};
 DWORD g_lastFlush = 0;
 
+void LogDragState(int seat, POINT p);   // OP23 diagnostics, defined with HandleButton
+
 void FlushSeat(int seat) {
     if (!g_dirty[seat]) return;
     g_dirty[seat] = false;
@@ -410,6 +412,7 @@ void FlushSeat(int seat) {
     // it also draws its own arrow, because there is no longer a visible system
     // pointer to represent it.
     if (seat == g_activeSeat) {
+        if (g_verbose && s.lDown) LogDragState(seat, s.pos);
         g_stats[seat].cursorSets++;
         int64_t t0 = Qpc();
         PinCursor(s.pos);
@@ -429,8 +432,59 @@ void FlushSeat(int seat) {
     }
 }
 
+// The hidden hardware cursor can no longer tell the user that a window border
+// or corner is grabbable, so each seat's arrow does it: when the pointer rests
+// on the sizing border of a resizable window, the arrow becomes the matching
+// system resize arrow. The answer is the window's own WM_NCHITTEST, the same
+// question the system asks when a press lands, so what is shown is what a
+// press would grab.
+PointerShape ResizeShapeAt(POINT p) {
+    HWND under = WindowFromPoint(p);
+    if (!under) return PointerShape::Arrow;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(under, &pid);
+    if (pid == GetCurrentProcessId()) return PointerShape::Arrow;
+    // The sizing border belongs to the top-level window: a child is client area.
+    if (GetAncestor(under, GA_ROOT) != under) return PointerShape::Arrow;
+    const LONG style = GetWindowLongW(under, GWL_STYLE);
+    if (!(style & WS_THICKFRAME) || (style & WS_MAXIMIZE) || (style & WS_MINIMIZE))
+        return PointerShape::Arrow;
+
+    DWORD_PTR hit = 0;
+    if (!SendMessageTimeoutW(under, WM_NCHITTEST, 0, MAKELPARAM((SHORT)p.x, (SHORT)p.y),
+                             SMTO_ABORTIFHUNG, 25, &hit))
+        return PointerShape::Arrow;
+    switch ((LRESULT)hit) {
+    case HTLEFT: case HTRIGHT:           return PointerShape::SizeWE;
+    case HTTOP:  case HTBOTTOM:          return PointerShape::SizeNS;
+    case HTTOPLEFT: case HTBOTTOMRIGHT:  return PointerShape::SizeNWSE;
+    case HTTOPRIGHT: case HTBOTTOMLEFT:  return PointerShape::SizeNESW;
+    default:                             return PointerShape::Arrow;
+    }
+}
+
+// Re-asks only when the pointer has moved, and at most every 30 ms per seat;
+// the timer flush (250 ms) catches the position the throttle skipped. While
+// the seat holds a button the shape is left alone, so a resize in progress
+// keeps its arrow however far the pointer runs ahead of the window edge.
+void RefreshSeatShape(int seat) {
+    if (!g_cursorHidden) return;           // the real cursor shows its own shape
+    static POINT  askedAt[kMaxSeats];
+    static bool   asked[kMaxSeats] = {};
+    static DWORD  askedTick[kMaxSeats] = {};
+    Seat& s = g_seats[seat];
+    if (s.lDown || s.rDown || s.mDown) return;
+    if (asked[seat] && askedAt[seat].x == s.pos.x && askedAt[seat].y == s.pos.y) return;
+    const DWORD now = GetTickCount();
+    if (asked[seat] && now - askedTick[seat] < 30) return;
+    asked[seat] = true; askedAt[seat] = s.pos; askedTick[seat] = now;
+    if (g_overShell && seat == g_activeSeat) return;
+    g_overlay[seat].SetShape(ResizeShapeAt(s.pos));
+}
+
 void FlushPointers() {
     for (int i = 0; i < g_cfg.seatCount; ++i) FlushSeat(i);
+    for (int i = 0; i < g_cfg.seatCount; ++i) RefreshSeatShape(i);
     g_lastFlush = GetTickCount();
     ++g_perf.flushes;
 }
@@ -552,6 +606,49 @@ bool IsMenuTarget(HWND under, HWND root, const wchar_t** why) {
     return false;
 }
 
+// OP23 diagnostics (--verbose only): what the system makes of a left press,
+// and whether its move/size loop is running while the seat drags.
+const wchar_t* HitName(LRESULT h) {
+    switch (h) {
+    case HTCLIENT: return L"CLIENT";   case HTCAPTION: return L"CAPTION";
+    case HTLEFT: return L"LEFT";       case HTRIGHT: return L"RIGHT";
+    case HTTOP: return L"TOP";         case HTBOTTOM: return L"BOTTOM";
+    case HTTOPLEFT: return L"TOPLEFT"; case HTTOPRIGHT: return L"TOPRIGHT";
+    case HTBOTTOMLEFT: return L"BOTTOMLEFT"; case HTBOTTOMRIGHT: return L"BOTTOMRIGHT";
+    case HTBORDER: return L"BORDER";   case HTNOWHERE: return L"NOWHERE";
+    case HTTRANSPARENT: return L"TRANSPARENT"; case HTSYSMENU: return L"SYSMENU";
+    default: return L"other";
+    }
+}
+
+void LogPressHit(int seat, POINT p, HWND under) {
+    DWORD_PTR hit = 0;
+    const LRESULT ok = SendMessageTimeoutW(under, WM_NCHITTEST, 0, MAKELPARAM((SHORT)p.x, (SHORT)p.y),
+                                           SMTO_ABORTIFHUNG, 200, &hit);
+    HWND root = GetAncestor(under, GA_ROOT);
+    RECT wr{}; if (root) GetWindowRect(root, &wr);
+    POINT cur{}; GetCursorPos(&cur);
+    LogLine(L"[hit] seat %d press %ld,%ld real cursor %ld,%ld under %p [%s] hit=%s(%ld)%s  root %p [%s] rect %ld,%ld-%ld,%ld style %08lX",
+            seat, p.x, p.y, cur.x, cur.y, under, ClassOf(under), HitName((LRESULT)hit), (long)hit,
+            ok ? L"" : L" (no answer)", root, ClassOf(root), wr.left, wr.top, wr.right, wr.bottom,
+            root ? (unsigned long)GetWindowLongW(root, GWL_STYLE) : 0UL);
+}
+
+// Sampled while the owner holds the left button: the move/size loop shows as
+// GUI_INMOVESIZE with the target window holding the capture.
+void LogDragState(int seat, POINT p) {
+    static DWORD last = 0;
+    const DWORD now = GetTickCount();
+    if (now - last < 100) return;
+    last = now;
+    GUITHREADINFO gti{ sizeof(gti) };
+    const BOOL ok = GetGUIThreadInfo(0, &gti);
+    POINT cur{}; GetCursorPos(&cur);
+    LogLine(L"[drag] seat %d pos %ld,%ld real %ld,%ld gti=%d flags=%lX capture=%p [%s] active=%p",
+            seat, p.x, p.y, cur.x, cur.y, (int)ok, ok ? gti.flags : 0UL,
+            ok ? gti.hwndCapture : nullptr, ok ? ClassOf(gti.hwndCapture) : L"", ok ? gti.hwndActive : nullptr);
+}
+
 void HandleButton(int seat, USHORT flags, USHORT data) {
     // Physical arrival time, captured before any settle sleeps distort it —
     // the anti-compression pacing below compares against this.
@@ -649,6 +746,10 @@ void HandleButton(int seat, USHORT flags, USHORT data) {
 
         PinCursor(p);
         SendMouseAt(p, MOUSEEVENTF_MOVE);
+        if (g_verbose && (flags & RI_MOUSE_LEFT_BUTTON_DOWN)) {
+            HWND hit = WindowFromPoint(p);
+            if (hit) LogPressHit(seat, p, hit);
+        }
     }
 
     // Releases inject only if we injected the matching press. A press
