@@ -105,7 +105,7 @@ a different and much larger project.
 |---|---|
 | Operating system | Windows 10 or 11, x64. Windows 8 is the theoretical minimum (Magnification API) but is untested. |
 | Architecture | x64 only. The Magnification API is not supported under WOW64, so a 32-bit build will not work correctly. |
-| Privileges | Runs as a normal user. No driver, no signing requirements. Administrator rights are only needed to steer elevated windows (Task Manager) and to create the optional logon task. |
+| Privileges | No driver, no signing requirements. The engine **should run as administrator**: Windows keeps the input aimed at elevated windows (Task Manager, anything started "as administrator") away from a program at the ordinary level, so without it those windows escape the mice. The engine asks for the rights itself when you start it (one permission prompt, none if the logon task starts it). If you refuse, it still runs, says so in the log and in a tray notification, and those windows are not followed. |
 | Hardware | Two or more mice. Any HID mouse should work; wireless receivers that expose several HID collections are handled by `--identify`. |
 | Displays | Multi-monitor supported, including negative coordinates. Mixed-DPI setups are handled but lightly tested. |
 
@@ -330,7 +330,17 @@ Each arrow that moves costs about 0.2 to 0.3 ms per flush (measured, 1 to 8 over
 
 Run flags: `--verbose` enables per-event tracing to the log, `--seconds=N` exits after N
 seconds, `--cage` forces the legacy cursor-clipping strategy, `--startup` is what the
-logon task passes (see below).
+logon task passes (see below), `--no-elevate` runs at your own level without asking for
+administrator rights (the engine asks by default; the copy it starts carries `--elevated`).
+
+The request is made by the program, not by its manifest, so that `--help`, `--list` and the
+settings window never show a prompt. The cleaner Windows route for input tools, the
+`uiAccess` manifest option, needs a signed executable installed under Program Files; it
+comes with code signing and the installer, not before.
+
+After Ctrl+Alt+Del or a locked session, the secure desktop takes the input away from every
+ordinary program and gives you the normal Windows pointer. When you return, openMouse
+registers its input again, hides the hardware cursor again and redraws the arrows.
 
 Logs are written to `%APPDATA%\openMouse\openmouse.log` and rotate at 4 MB.
 

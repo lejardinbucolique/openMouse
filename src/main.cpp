@@ -24,6 +24,7 @@
 
 #include "openmouse.h"
 #include <shellapi.h>   // CommandLineToArgvW — not pulled in by WIN32_LEAN_AND_MEAN
+#include <wtsapi32.h>   // lock/unlock notifications
 #include <atomic>
 #include <set>
 #include <thread>
@@ -2248,6 +2249,22 @@ void RefreshArrowsNow() {
     ReassertArrows();
 }
 
+// Back on the normal desktop after Ctrl+Alt+Del or a locked session. The
+// secure desktop takes the input, the drawing and the cursor away from every
+// ordinary program while it is up; what we registered may not have survived
+// it. Registering again is harmless when it did, so put back, in order: the raw
+// input registration, the hidden hardware cursor, the arrows. (The secure
+// desktop itself stays out of reach: there Windows gives the normal pointer.)
+void ResumeAfterSecureDesktop(const wchar_t* why) {
+    LogLine(L"[session] %s — registering input again", why);
+    if (!RegisterCapture(g_hwnd, g_cfg.captureKeyboards))
+        LogLine(L"[session] raw input could not be registered again");
+    if (g_cursorHidden && g_magReady && g_mag.ShowSystemCursor && !g_mag.ShowSystemCursor(FALSE))
+        LogLine(L"[session] hardware cursor could not be hidden again: %lu", GetLastError());
+    if (!g_mouseGate) LogLine(L"[session] the mouse gate is gone — restart openMouse");
+    RefreshArrowsNow();
+}
+
 // A menu opens (or closes) over the arrows: re-read the state at once, then
 // again at 30, 80 and 200 ms. Bounded, so nothing is reasserted permanently
 // (the once-a-second pass of OP8 stays the only steady one).
@@ -2302,6 +2319,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // or to stop (0).
         if (wp == 0) StopLearn();
         else         StartLearn((int)wp - 1);
+        return 0;
+
+    case WM_WTSSESSION_CHANGE:
+        if (wp == WTS_SESSION_UNLOCK)         ResumeAfterSecureDesktop(L"session unlocked");
+        else if (wp == WTS_CONSOLE_CONNECT)   ResumeAfterSecureDesktop(L"console reconnected");
+        else if (wp == WTS_SESSION_LOCK)      LogLine(L"[session] locked — the secure desktop has the input");
         return 0;
 
     case WM_DISPLAYCHANGE:
@@ -3284,6 +3307,24 @@ void TrayAdd(HWND hwnd) {
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
 
+// Without administrator rights Windows keeps the input aimed at elevated
+// windows (Task Manager...) away from us: say so, once, where the user looks.
+void TrayWarnNotElevated(HWND hwnd) {
+    NOTIFYICONDATAW nid{};
+    nid.cbSize     = sizeof(nid);
+    nid.hWnd       = hwnd;
+    nid.uID        = kTrayIconId;
+    nid.uFlags     = NIF_INFO;
+    nid.dwInfoFlags = NIIF_WARNING;
+    const bool fr = UiFrench();
+    wcscpy_s(nid.szInfoTitle, fr ? L"openMouse sans droits d'administrateur"
+                                 : L"openMouse without administrator rights");
+    wcscpy_s(nid.szInfo, fr
+        ? L"Le Gestionnaire des tâches et les fenêtres lancées en administrateur échapperont aux souris. Relancez openMouse en acceptant la demande d'autorisation."
+        : L"Task Manager and windows started as administrator will escape the mice. Start openMouse again and accept the permission prompt.");
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 void TrayRemove(HWND hwnd) {
     NOTIFYICONDATAW nid{};
     nid.cbSize = sizeof(nid);
@@ -3402,6 +3443,10 @@ int RunMain(HINSTANCE inst) {
     ChangeWindowMessageFilterEx(g_hwnd, kLearnMsg, MSGFLT_ALLOW, nullptr);
     ChangeWindowMessageFilterEx(g_hwnd, kSeatsMsg, MSGFLT_ALLOW, nullptr);   // only makes us answer
 
+    // Told when the session locks or unlocks, to take the input back on return.
+    if (!WTSRegisterSessionNotification(g_hwnd, NOTIFY_FOR_THIS_SESSION))
+        LogLine(L"[session] no lock/unlock notifications: %lu", GetLastError());
+
     ApplyBindings();
     ResolveSeatBounds();
 
@@ -3448,6 +3493,13 @@ int RunMain(HINSTANCE inst) {
 
     TrayAdd(g_hwnd);
     SpawnJanitor();
+    if (!IsElevated()) {
+        LogLine(L"[privileges] running WITHOUT administrator rights: Task Manager and any window "
+                L"started as administrator will not follow the mice (their input is filtered out)");
+        TrayWarnNotElevated(g_hwnd);
+    } else {
+        LogLine(L"[privileges] running with administrator rights");
+    }
 
     LogLine(L"openMouse running — %d seats, keyboard capture %s",
             g_cfg.seatCount, g_cfg.captureKeyboards ? L"ON" : L"off");
@@ -3482,6 +3534,7 @@ int RunMain(HINSTANCE inst) {
     watchdog.join();
     StopGateThread();
     gate.join();
+    WTSUnRegisterSessionNotification(g_hwnd);
     TrayRemove(g_hwnd);
     UnregisterCapture();
     RestoreSystemCursor();
@@ -3502,6 +3555,42 @@ int RunRestoreCursor() {
     return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------- elevation
+//
+// Windows isolates integrity levels (UIPI): an engine at the ordinary level
+// receives no input aimed at an elevated window (Task Manager, anything started
+// "as administrator") and cannot draw over or steer it. The arrows then freeze
+// while the hidden real cursor keeps moving. So the engine wants to run
+// elevated, and asks for it itself rather than through the manifest: a
+// requireAdministrator manifest would also put a prompt in front of --help,
+// --list and the settings window, which have no need of it.
+
+// Start this same program again through the "runas" verb, with the same
+// arguments plus --elevated so the copy never asks a second time. True when
+// the elevated copy is on its way and this one should simply leave.
+bool RelaunchElevated(const std::wstring& args) {
+    wchar_t exe[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return false;
+    const std::wstring params = args.empty() ? L"--elevated" : args + L" --elevated";
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize       = sizeof(sei);
+    sei.fMask        = SEE_MASK_NOASYNC;
+    sei.lpVerb       = L"runas";
+    sei.lpFile       = exe;
+    sei.lpParameters = params.c_str();
+    sei.nShow        = SW_HIDE;
+    if (ShellExecuteExW(&sei)) {
+        LogLine(L"[privileges] not elevated — started an administrator copy, this one leaves");
+        return true;
+    }
+    const DWORD err = GetLastError();
+    if (err == ERROR_CANCELLED)
+        LogLine(L"[privileges] administrator rights were refused — running without them");
+    else
+        LogLine(L"[privileges] could not start an administrator copy (%lu) — running without rights", err);
+    return false;
+}
+
 } // namespace
 } // namespace om
 
@@ -3519,8 +3608,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::wstring mode;
+    std::wstring passArgs;   // the command line again, to hand to an elevated copy
+    bool noElevate = false;
     for (int i = 1; i < argc; ++i) {
         std::wstring a = argv[i];
+        if (a != L"--no-elevate" && a != L"--elevated")
+            passArgs += (passArgs.empty() ? L"\"" : L" \"") + a + L"\"";
         if (a == L"--list" || a == L"--probe" || a == L"--probe-echo" ||
             a == L"--identify" || a == L"--watch" || a == L"--restore-cursor" ||
             a == L"--receiver" || a == L"--monitor" || a == L"--settings" ||
@@ -3533,6 +3626,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             om::g_eatMoves = false;   // force the old ClipCursor behaviour
         else if (a == L"--startup")
             om::g_startup = true;     // started by the logon task
+        else if (a == L"--no-elevate")
+            noElevate = true;         // run at the user's own level, never ask for more
+        else if (a == L"--elevated")
+            noElevate = true;         // this is already the administrator copy
         else if (a == L"--autostart=on" || a == L"--autostart=off" || a == L"--autostart=dry-run")
             mode = a;
         else if (a.rfind(L"--seconds=", 0) == 0)
@@ -3594,6 +3691,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"              --seconds=N     auto-exit after N seconds");
         om::LogLine(L"              --perf          input latency figures every 2 s");
         om::LogLine(L"              --startup       what the logon task passes: wait for the desktop first");
+        om::LogLine(L"              --no-elevate    do not ask for administrator rights (the engine asks by default)");
         om::LogLine(L"  openmouse.exe --autostart=on|off  create or delete the logon task (needs administrator)");
         om::LogLine(L"  openmouse.exe --autostart=dry-run  print the task that would be created, change nothing");
         om::LogLine(L"");
@@ -3604,5 +3702,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"  Log file: %%APPDATA%%\\openMouse\\openmouse.log");
         return 0;
     }
+    // The engine itself wants administrator rights (see the elevation note
+    // above). The logon task already starts it elevated; a copy started by hand
+    // asks once. A refusal is not fatal: it runs, says so, and some windows
+    // will escape the mice.
+    if (!noElevate && !om::IsElevated() && om::RelaunchElevated(passArgs))
+        return 0;
     return om::RunMain(inst);
 }

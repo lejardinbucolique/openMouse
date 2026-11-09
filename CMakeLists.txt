@@ -24,7 +24,7 @@ target_compile_definitions(openmouse PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(openmouse PRIVATE user32 gdi32 shell32 ole32 uuid advapi32 comctl32 oleaut32)
+target_link_libraries(openmouse PRIVATE user32 gdi32 shell32 ole32 uuid advapi32 comctl32 oleaut32 wtsapi32)
 
 if(MSVC)
     # /utf-8: the sources are UTF-8 without a BOM. Without it MSVC assumes the

@@ -41,5 +41,5 @@ cl /nologo /std:c++17 /EHsc /W4 /permissive- /O2 /MT /utf-8 ^
    /Fo:build\ /Fe:%OUT% ^
    src\main.cpp src\devices.cpp src\overlay.cpp src\config.cpp src\settings.cpp src\autostart.cpp build\openmouse.res ^
    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MANIFEST:EMBED ^
-   user32.lib gdi32.lib shell32.lib ole32.lib uuid.lib advapi32.lib comctl32.lib
+   user32.lib gdi32.lib shell32.lib ole32.lib uuid.lib advapi32.lib comctl32.lib wtsapi32.lib
 exit /b %errorlevel%
