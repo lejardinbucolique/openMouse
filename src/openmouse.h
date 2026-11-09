@@ -130,6 +130,12 @@ struct Config {
     };
     std::vector<Accel> accel = std::vector<Accel>(4);
 
+    // Optional screen a seat's pointer is kept inside, by its Windows device
+    // name (\\.\DISPLAY2). Empty: the pointer roams the whole desktop. A
+    // screen that is not plugged in behaves as empty, so the pointer is never
+    // shut in a rectangle nobody can see; the key is kept for when it returns.
+    std::vector<std::wstring> screen = std::vector<std::wstring>(4);
+
     // Draw a coloured ring around the seat that currently owns the real
     // system cursor.
     bool markActiveSeat = true;
@@ -204,6 +210,10 @@ bool UiFrench();
 
 RECT VirtualScreenRect();
 void ClampToVirtualScreen(POINT& p);
+void ClampToRect(POINT& p, const RECT& r);
+// The screens plugged in now, in Windows order (primary flagged).
+struct ScreenInfo { std::wstring name; RECT rc; bool primary; };
+std::vector<ScreenInfo> ListScreens();
 bool IsShellWindowClass(const wchar_t* cls);
 void LogLine(const wchar_t* fmt, ...);
 void OpenLogFile();

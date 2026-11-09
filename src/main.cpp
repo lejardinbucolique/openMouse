@@ -529,6 +529,33 @@ struct AccelState {
 };
 AccelState g_accel[kMaxSeats];
 
+// The rectangle each seat is kept inside: its assigned screen when one is set
+// and plugged in, otherwise the whole desktop. Resolved once per settings load
+// or display change, never per mouse event.
+struct SeatBounds { bool screen = false; RECT rc{}; };
+SeatBounds g_bounds[kMaxSeats];
+
+void ResolveSeatBounds() {
+    const std::vector<ScreenInfo> screens = ListScreens();
+    for (int i = 0; i < kMaxSeats; ++i) {
+        g_bounds[i] = SeatBounds{};
+        const std::wstring want = i < (int)g_cfg.screen.size() ? g_cfg.screen[i] : L"";
+        if (want.empty()) continue;
+        for (const ScreenInfo& sc : screens)
+            if (_wcsicmp(sc.name.c_str(), want.c_str()) == 0) { g_bounds[i] = { true, sc.rc }; break; }
+        LogLine(L"[screen] seat %d kept on %s: %s", i, want.c_str(),
+                g_bounds[i].screen ? L"yes" : L"not plugged in, desktop instead");
+    }
+}
+
+void ClampSeat(int seat, POINT& p) {
+    ClampToVirtualScreen(p);
+    if (seat >= 0 && seat < kMaxSeats && g_bounds[seat].screen) ClampToRect(p, g_bounds[seat].rc);
+}
+
+// Brings every seat back inside its bounds, after they changed.
+void ReclampSeats();
+
 void MovePointer(int seat, int dx, int dy) {
     Seat& s = g_seats[seat];
     const double k = (seat < (int)g_cfg.sensitivity.size()) ? g_cfg.sensitivity[seat] : 1.0;
@@ -571,7 +598,7 @@ void MovePointer(int seat, int dx, int dy) {
         s.pos.x += mx;
         s.pos.y += my;
     }
-    ClampToVirtualScreen(s.pos);
+    ClampSeat(seat, s.pos);
     g_dirty[seat] = true;
 }
 
@@ -859,7 +886,7 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
         p.x = v.left + (LONG)(((int64_t)m.lLastX * (v.right  - v.left)) / 65535);
         p.y = v.top  + (LONG)(((int64_t)m.lLastY * (v.bottom - v.top))  / 65535);
         g_seats[seat].pos = p;
-        ClampToVirtualScreen(g_seats[seat].pos);
+        ClampSeat(seat, g_seats[seat].pos);
         g_dirty[seat] = true;
     } else if (m.lLastX || m.lLastY) {
         MovePointer(seat, m.lLastX, m.lLastY);
@@ -1187,7 +1214,12 @@ void InitSeat(int i, POINT at) {
     g_seats[i]       = Seat{};
     g_seats[i].index = i;
     g_seats[i].pos   = at;
-    ClampToVirtualScreen(g_seats[i].pos);
+    // A seat kept on a screen starts in its middle rather than at an edge.
+    if (g_bounds[i].screen) {
+        const RECT& r = g_bounds[i].rc;
+        g_seats[i].pos = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+    }
+    ClampSeat(i, g_seats[i].pos);
     const COLORREF c = (i < (int)g_cfg.seatColors.size())
                      ? g_cfg.seatColors[i] : RGB(200, 200, 200);
     // Every seat gets an overlay, including seat 0. Seat 0 starts out
@@ -1415,6 +1447,17 @@ void TrayMenu(HWND hwnd);   // defined with the other tray plumbing below
 // The settings window has written new seat values: take the speed ones at
 // once. Only sensitivity and acceleration are live; the rest of the file
 // (bindings, colours, seat count) still needs a restart.
+void ReclampSeats() {
+    for (int i = 0; i < g_cfg.seatCount && i < kMaxSeats; ++i) {
+        const POINT before = g_seats[i].pos;
+        ClampSeat(i, g_seats[i].pos);
+        if (before.x != g_seats[i].pos.x || before.y != g_seats[i].pos.y) {
+            g_dirty[i] = true;
+            FlushSeat(i);
+        }
+    }
+}
+
 void ReloadSettings() {
     Config fresh;
     if (!fresh.Load(Config::DefaultPath())) {
@@ -1423,6 +1466,9 @@ void ReloadSettings() {
     }
     g_cfg.sensitivity = fresh.sensitivity;
     g_cfg.accel       = fresh.accel;
+    g_cfg.screen      = fresh.screen;
+    ResolveSeatBounds();
+    ReclampSeats();
     for (auto& a : g_accel) a = AccelState{};
     for (int i = 0; i < g_cfg.seatCount; ++i) {
         const double k = i < (int)g_cfg.sensitivity.size() ? g_cfg.sensitivity[i] : 1.0;
@@ -1486,6 +1532,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case kReloadSettingsMsg:
         ReloadSettings();
         return 0;
+
+    case WM_DISPLAYCHANGE:
+        // A screen came or went: an enclosed seat follows it, or roams free.
+        ResolveSeatBounds();
+        ReclampSeats();
+        return DefWindowProcW(hwnd, msg, wp, lp);
 
     case WM_INPUT_DEVICE_CHANGE:
         // One of these arrives per device the moment we register, so a machine
@@ -2524,6 +2576,7 @@ int RunMain(HINSTANCE inst) {
     ChangeWindowMessageFilterEx(g_hwnd, kReloadSettingsMsg, MSGFLT_ALLOW, nullptr);
 
     ApplyBindings();
+    ResolveSeatBounds();
 
     // Seed every seat at the current cursor, then fan them out so they are not
     // stacked on top of each other at startup.

@@ -38,7 +38,7 @@ constexpr wchar_t kEngineClass[]   = L"openMouse.Engine";
 
 enum Str {
     sTitle, sSeat, sSensitivity, sAccel, sSlow, sFast, sSpeed, sScreen, sScreenNone,
-    sDefaults, sUndo, sClose, sHint, sApplied, sNotRunning, sSaveFailed, sStrCount
+    sScreenItem, sPrimary, sUnplugged, sDefaults, sUndo, sClose, sHint, sApplied, sNotRunning, sSaveFailed, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -50,7 +50,10 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Fast motion (crossing the screen)",
     L"Acceleration threshold",
     L"Keep inside screen",
-    L"None (coming soon)",
+    L"No, the whole desktop",
+    L"Screen %d: %d × %d",
+    L" (main)",
+    L"%s (unplugged)",
     L"Default values",
     L"Undo my changes",
     L"Close",
@@ -71,7 +74,10 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Gestes rapides (traverser l'écran)",
     L"Seuil d'accélération",
     L"Rester dans l'écran",
-    L"Aucun (bientôt disponible)",
+    L"Non, tout le bureau",
+    L"Écran %d : %d × %d",
+    L" (principal)",
+    L"%s (débranché)",
     L"Valeurs par défaut",
     L"Annuler mes changements",
     L"Fermer",
@@ -124,6 +130,7 @@ struct State {
     HFONT   font = nullptr, bold = nullptr;
     UINT    dpi = 96;
     bool    pending = false;
+    std::vector<ScreenInfo> screens;   // plugged in when the window opened
 } g;
 
 int Px(int dip) { return MulDiv(dip, (int)g.dpi, 96); }
@@ -159,6 +166,7 @@ void Put(Config& c, int seat, Field f, double v) {
 void EnsureSeats(Config& c, int n) {
     if ((int)c.sensitivity.size() < n) c.sensitivity.resize(n, 1.0);
     if ((int)c.accel.size()       < n) c.accel.resize(n);
+    if ((int)c.screen.size()      < n) c.screen.resize(n);
     if ((int)c.seatColors.size()  < n) c.seatColors.resize(n, RGB(200, 200, 200));
 }
 
@@ -183,6 +191,7 @@ void Apply() {
     for (int i = 0; i < g.seats; ++i) {
         disk.sensitivity[i] = g.cur.sensitivity[i];
         disk.accel[i]       = g.cur.accel[i];
+        disk.screen[i]      = g.cur.screen[i];
     }
     if (!disk.Save(g.path)) {
         wchar_t buf[MAX_PATH + 64];
@@ -220,6 +229,39 @@ void ShowSeat(int seat) {
         EnableWindow(u.slider[f], on);
     }
     SendMessageW(u.accel, BM_SETCHECK, accel ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    // Screen list: "none", every screen plugged in, and the chosen one if it
+    // is unplugged, so opening the window never drops a choice by itself.
+    SendMessageW(u.screen, CB_RESETCONTENT, 0, 0);
+    SendMessageW(u.screen, CB_ADDSTRING, 0, (LPARAM)S(sScreenNone));
+    const std::wstring& want = g.cur.screen[seat];
+    int sel = 0;
+    for (size_t k = 0; k < g.screens.size(); ++k) {
+        const ScreenInfo& sc = g.screens[k];
+        wchar_t buf[96];
+        swprintf(buf, 96, S(sScreenItem), (int)k + 1,
+                 (int)(sc.rc.right - sc.rc.left), (int)(sc.rc.bottom - sc.rc.top));
+        std::wstring item = buf;
+        if (sc.primary) item += S(sPrimary);
+        SendMessageW(u.screen, CB_ADDSTRING, 0, (LPARAM)item.c_str());
+        if (!want.empty() && _wcsicmp(sc.name.c_str(), want.c_str()) == 0) sel = (int)k + 1;
+    }
+    if (!want.empty() && sel == 0) {
+        wchar_t buf[96];
+        swprintf(buf, 96, S(sUnplugged), want.c_str());
+        SendMessageW(u.screen, CB_ADDSTRING, 0, (LPARAM)buf);
+        sel = (int)g.screens.size() + 1;
+    }
+    SendMessageW(u.screen, CB_SETCURSEL, sel, 0);
+}
+
+void OnScreen(int seat) {
+    const int sel = (int)SendMessageW(g.ui[seat].screen, CB_GETCURSEL, 0, 0);
+    if (sel == 0)                              g.cur.screen[seat].clear();
+    else if (sel <= (int)g.screens.size())     g.cur.screen[seat] = g.screens[sel - 1].name;
+    else                                       return;   // the unplugged one, unchanged
+    ShowSeat(seat);
+    Apply();
 }
 
 HWND Make(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style, int id) {
@@ -249,13 +291,8 @@ void CreateControls(HWND hwnd) {
             SendMessageW(u.slider[f], TBM_SETLINESIZE, 0, 1);
             SendMessageW(u.slider[f], TBM_SETPAGESIZE, 0, (LPARAM)std::lround(r.scale / 2));
         }
-        // Placeholder for keeping a pointer on its own screen (task OP25).
         u.screenLabel = Make(hwnd, L"STATIC", S(sScreen), SS_LEFT, CtlId(i, cScreenLabel));
-        u.screen = Make(hwnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, CtlId(i, cScreen));
-        SendMessageW(u.screen, CB_ADDSTRING, 0, (LPARAM)S(sScreenNone));
-        SendMessageW(u.screen, CB_SETCURSEL, 0, 0);
-        EnableWindow(u.screenLabel, FALSE);
-        EnableWindow(u.screen, FALSE);
+        u.screen = Make(hwnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cScreen));
         u.defaults = Make(hwnd, L"BUTTON", S(sDefaults), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cDefaults));
         ShowSeat(i);
     }
@@ -387,6 +424,7 @@ void OnCommand(HWND hwnd, int id) {
         for (int i = 0; i < g.seats; ++i) {
             g.cur.sensitivity[i] = g.opened.sensitivity[i];
             g.cur.accel[i]       = g.opened.accel[i];
+            g.cur.screen[i]      = g.opened.screen[i];
             ShowSeat(i);
         }
         Apply();
@@ -401,6 +439,7 @@ void OnCommand(HWND hwnd, int id) {
     } else if (ctl == cDefaults) {
         g.cur.sensitivity[seat] = 1.0;
         g.cur.accel[seat]       = Config::Accel{};
+        g.cur.screen[seat].clear();
         ShowSeat(seat);
         Apply();
     }
@@ -413,6 +452,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_COMMAND:
         if (HIWORD(wp) == BN_CLICKED) OnCommand(hwnd, LOWORD(wp));
+        else if (HIWORD(wp) == CBN_SELCHANGE) {
+            int seat, ctl;
+            if (SeatOf(LOWORD(wp), seat, ctl) && ctl == cScreen) OnScreen(seat);
+        }
         return 0;
     case WM_TIMER:
         KillTimer(hwnd, wp);
@@ -467,6 +510,7 @@ int RunSettings(HINSTANCE inst) {
     g.seats = g.opened.seatCount;
     EnsureSeats(g.opened, g.seats);
     g.cur = g.opened;
+    g.screens = ListScreens();
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);

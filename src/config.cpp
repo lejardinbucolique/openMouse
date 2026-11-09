@@ -129,6 +129,7 @@ void Config::EnsureSeatSlots(int n) {
     if (n > kMaxSeats) n = kMaxSeats;
     if ((int)sensitivity.size() < n) sensitivity.resize(n, 1.0);
     if ((int)accel.size()       < n) accel.resize(n);
+    if ((int)screen.size()      < n) screen.resize(n);
     while ((int)seatColors.size() < n) {
         seatColors.push_back(RGB(200, 200, 200));
         seatColors.back() = PickSeatColor((int)seatColors.size() - 1);
@@ -172,10 +173,12 @@ bool Config::Load(const std::wstring& path) {
                 if ((int)sensitivity.size() <= idx) sensitivity.resize(idx + 1, 1.0);
                 if ((int)seatColors.size()  <= idx) seatColors.resize(idx + 1, RGB(200,200,200));
                 if ((int)accel.size()       <= idx) accel.resize(idx + 1);
+                if ((int)screen.size()      <= idx) screen.resize(idx + 1);
                 if (key == L"sensitivity") sensitivity[idx] = _wtof(val.c_str());
                 else if (key == L"accel_slow")  { accel[idx].on = true; accel[idx].slow  = _wtof(val.c_str()); }
                 else if (key == L"accel_fast")  { accel[idx].on = true; accel[idx].fast  = _wtof(val.c_str()); }
                 else if (key == L"accel_speed") { accel[idx].on = true; accel[idx].speed = _wtof(val.c_str()); }
+                else if (key == L"screen") screen[idx] = val;
                 else if (key == L"color") {
                     const unsigned long v = wcstoul(val.c_str(), nullptr, 16);
                     seatColors[idx] = RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
@@ -212,6 +215,10 @@ bool Config::Save(const std::wstring& path) const {
             swprintf(buf, 128, L"accel_slow=%.2f\naccel_fast=%.2f\naccel_speed=%.2f\n\n",
                      accel[i].slow, accel[i].fast, accel[i].speed);
             t += buf;
+        }
+        if (i < (int)screen.size() && !screen[i].empty()) {
+            t.resize(t.size() - 1);
+            t += L"screen=" + screen[i] + L"\n\n";
         }
     }
 

@@ -7,6 +7,7 @@
 // seat's colour.
 #include "openmouse.h"
 #include <cwchar>
+#include <algorithm>
 
 namespace om {
 namespace {
@@ -356,11 +357,33 @@ RECT VirtualScreenRect() {
 }
 
 void ClampToVirtualScreen(POINT& p) {
-    const RECT r = VirtualScreenRect();
+    ClampToRect(p, VirtualScreenRect());
+}
+
+void ClampToRect(POINT& p, const RECT& r) {
     if (p.x < r.left)       p.x = r.left;
     if (p.y < r.top)        p.y = r.top;
     if (p.x > r.right  - 1) p.x = r.right  - 1;
     if (p.y > r.bottom - 1) p.y = r.bottom - 1;
+}
+
+namespace {
+BOOL CALLBACK AddScreen(HMONITOR mon, HDC, LPRECT, LPARAM out) {
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(mon, &mi))
+        ((std::vector<ScreenInfo>*)out)->push_back(
+            { mi.szDevice, mi.rcMonitor, (mi.dwFlags & MONITORINFOF_PRIMARY) != 0 });
+    return TRUE;
+}
+} // namespace
+
+std::vector<ScreenInfo> ListScreens() {
+    std::vector<ScreenInfo> v;
+    EnumDisplayMonitors(nullptr, nullptr, AddScreen, (LPARAM)&v);
+    std::sort(v.begin(), v.end(), [](const ScreenInfo& a, const ScreenInfo& b) {
+        return a.rc.left != b.rc.left ? a.rc.left < b.rc.left : a.rc.top < b.rc.top; });
+    return v;
 }
 
 bool IsShellWindowClass(const wchar_t* cls) {
