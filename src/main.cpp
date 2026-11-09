@@ -365,6 +365,9 @@ void UnpinCursor() {
 // visible and the seat's overlay hidden, restoring a usable pointer over the
 // taskbar, Start and the tray. Reverts the moment the pointer leaves.
 bool g_overShell = false;
+DWORD g_lastShellFlip = 0;                       // tick of the last accepted flip, 0 = none yet
+constexpr DWORD      kShellMinGapMs = 120;       // OP16: minimum time between two flips
+constexpr UINT_PTR   kShellRecheckTimer = 6;
 
 bool IsShellWindowAt(POINT p) {
     int64_t t0 = Qpc();
@@ -385,6 +388,21 @@ void UpdateShellCursorFallback(int seat) {
     const bool over = IsShellWindowAt(g_seats[seat].pos);
     g_perf.tShell += Qpc() - t0;
     if (over == g_overShell) return;
+
+    // OP16: a pointer resting on the edge of the taskbar made this detector
+    // change its mind hundreds of times a second (725 flips in one log), each
+    // flip costing a ShowSystemCursor and an overlay show/hide that starved the
+    // arrows. Two flips are never closer than kShellMinGapMs; a refused flip is
+    // re-read by a one-shot timer, so a pointer that has really moved on still
+    // ends up in the right state when it stops.
+    const DWORD now = GetTickCount();
+    if (g_lastShellFlip && (now - g_lastShellFlip) < kShellMinGapMs) {
+        if (g_hwnd)
+            SetTimer(g_hwnd, kShellRecheckTimer,
+                     kShellMinGapMs - (now - g_lastShellFlip) + 5, nullptr);
+        return;
+    }
+    g_lastShellFlip = now;
     g_overShell = over;
     g_mag.ShowSystemCursor(over ? TRUE : FALSE);
     g_overlay[seat].Show(!over);
@@ -1526,6 +1544,7 @@ DWORD g_gateThreadId = 0;
 
 void GateThreadProc() {
     g_gateThreadId = GetCurrentThreadId();
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);   // OP16
     g_mouseGate = SetWindowsHookExW(WH_MOUSE_LL, MouseGate, GetModuleHandleW(nullptr), 0);
     if (!g_mouseGate) {
         LogLine(L"[gate] SetWindowsHookEx failed: %lu — physical clicks are NOT suppressed", GetLastError());
@@ -2301,6 +2320,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER: {
         TimerProbe probe(wp);
+        if (wp == kShellRecheckTimer) {     // a shell flip was held back (OP16)
+            KillTimer(hwnd, kShellRecheckTimer);
+            if (g_activeSeat >= 0 && g_activeSeat < g_cfg.seatCount)
+                UpdateShellCursorFallback(g_activeSeat);
+            return 0;
+        }
         if (wp == 3) {                      // coalesced device-change rescan
             KillTimer(hwnd, 3);
             Rescan();
@@ -3326,6 +3351,15 @@ void TrayMenu(HWND hwnd) {
 
 int RunMain(HINSTANCE inst) {
     SetUnhandledExceptionFilter(EmergencyRestore);
+
+    // OP16: the system cursor is serviced ahead of ordinary scheduling, while
+    // the arrows are drawn by this process and lose the CPU when other
+    // processes saturate it (the arrows froze for seconds under load). Run
+    // above normal, and the input thread (this one) above the rest of the
+    // process. HIGH, not REALTIME: it never starves the system.
+    if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS))
+        LogLine(L"[prio] SetPriorityClass failed: %lu", GetLastError());
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
     // A clip rect survives the death of the process that set it, so a
     // previous instance killed hard enough to outrun its janitor can leave
