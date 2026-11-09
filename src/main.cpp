@@ -1083,6 +1083,33 @@ void ApplyBindings() {
     const bool haveKbdCfg   = !g_cfg.keyboardBinding.empty();
     int autoMouse = 0, autoKeyboard = 0;
 
+    // A mouse moved to another USB port, or renumbered by a reboot, comes
+    // back with a new instance id in its path and would no longer match.
+    // Exact paths are claimed first, so of two identical mice each keeps its
+    // own entry when it can; the entries left over then go, in order, to the
+    // present mice of the same hardware id, and the ini follows.
+    std::set<std::wstring> claimed;
+    for (const auto& d : devices)
+        if (d.type == RIM_TYPEMOUSE && g_cfg.mouseBinding.count(d.path)) claimed.insert(d.path);
+    std::map<std::wstring, int> moved;   // new path -> seat, taken over from a stale entry
+    for (const auto& d : devices) {
+        if (d.type != RIM_TYPEMOUSE || g_cfg.mouseBinding.count(d.path)) continue;
+        const std::wstring key = StableKey(d.path);
+        if (key.empty()) continue;
+        for (auto it = g_cfg.mouseBinding.begin(); it != g_cfg.mouseBinding.end(); ++it) {
+            if (claimed.count(it->first) || StableKey(it->first) != key) continue;
+            moved[d.path] = it->second;
+            g_cfg.mouseBinding.erase(it);
+            break;
+        }
+    }
+    for (const auto& kv : moved) {
+        g_cfg.mouseBinding[kv.first] = kv.second;
+        LogLine(L"[rebind] mouse seat %d : chemin mis à jour  %s", kv.second, kv.first.c_str());
+    }
+    if (!moved.empty() && !g_cfg.Save(Config::DefaultPath()))
+        LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
+
     for (const auto& d : devices) {
         if (d.type == RIM_TYPEMOUSE) {
             auto it = g_cfg.mouseBinding.find(d.path);

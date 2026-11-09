@@ -41,6 +41,14 @@ std::vector<DeviceInfo> EnumerateDevices();
 std::wstring            DevicePathFromHandle(HANDLE h);
 std::wstring            FriendlyNameFromPath(const std::wstring& path);
 
+// Identity that survives a change of USB port or of enumeration order. The
+// interface path embeds an instance id (the "6&1b42cbdd&0&0000" part) that
+// depends on both; the hardware id before it does not. Returns e.g.
+// "hid#vid_046d&pid_c077" (lower case, MI_/Col suffixes kept so the
+// collections of one receiver stay distinct), or "" when the path carries no
+// VID/PID (ACPI touchpads, PS/2), which then only ever match exactly.
+std::wstring StableKey(const std::wstring& path);
+
 // ---------------------------------------------------------------- seats
 
 struct Seat {

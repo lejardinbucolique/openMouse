@@ -69,6 +69,33 @@ std::wstring FriendlyNameFromPath(const std::wstring& path) {
     return name;
 }
 
+static std::wstring Lower(std::wstring s) {
+    for (auto& c : s) c = (wchar_t)towlower(c);
+    return s;
+}
+
+// "\\?\HID#VID_046D&PID_C077#6&1b42cbdd&0&0000#{...}" -> the three '#'
+// separated components after the prefix: class, hardware id, instance id.
+static std::wstring PathComponent(const std::wstring& path, int index) {
+    std::wstring s = path;
+    if (s.rfind(L"\\\\?\\", 0) == 0) s = s.substr(4);
+    size_t start = 0;
+    for (int i = 0; i < index; ++i) {
+        start = s.find(L'#', start);
+        if (start == std::wstring::npos) return L"";
+        ++start;
+    }
+    size_t end = s.find(L'#', start);
+    return s.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+}
+
+std::wstring StableKey(const std::wstring& path) {
+    const std::wstring cls = PathComponent(path, 0), hw = PathComponent(path, 1);
+    const std::wstring key = Lower(cls + L"#" + hw);
+    if (cls.empty() || hw.empty() || key.find(L"vid_") == std::wstring::npos) return L"";
+    return key;
+}
+
 std::vector<DeviceInfo> EnumerateDevices() {
     std::vector<DeviceInfo> result;
 
