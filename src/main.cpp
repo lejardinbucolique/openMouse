@@ -1641,22 +1641,55 @@ void ReassertArrows() {
 }
 
 constexpr UINT_PTR kMenuSettleTimer = 4;
-HWND g_menuTimerWnd = nullptr;
+HWND  g_menuTimerWnd = nullptr;
+DWORD g_trayClickTick = 0;            // when the tray icon was clicked, to time the menu
+DWORD g_menuEventTick = 0;            // when the last menu event fired, to time the passes
+int   g_menuStage = 0;
 
-// A menu opens above the arrows, and waiting for the once-a-second check left
-// the pointer hidden over it. Reassert the moment any menu pops up (tray
-// icon, desktop, an application's), and once more shortly after: the menu
-// window may not be shown yet when the event fires.
-void CALLBACK MenuPopupEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+// Delay before each follow-up pass, so the passes land at 30, 80 and 200 ms
+// after the menu event: the first catches a menu already on screen, the later
+// ones a menu the system shows a few frames after announcing it.
+constexpr UINT kMenuStageDelay[] = {30, 50, 120};
+constexpr int  kMenuStages = (int)(sizeof(kMenuStageDelay) / sizeof(kMenuStageDelay[0]));
+
+// Brings the arrows back in line with what is on screen now, without waiting
+// for a mouse move. The shell fallback is the part that needs it: with the
+// pointer over the taskbar the arrow is hidden and the real cursor shown, and
+// that state is only re-read on a move. Right after a click on the tray icon
+// the menu is up over the pointer, nothing moves, and the arrow stayed hidden
+// under it until the first twitch of the mouse.
+void RefreshArrowsNow() {
+    if (g_cursorHidden && g_activeSeat >= 0 && g_activeSeat < g_cfg.seatCount) {
+        g_overlay[g_activeSeat].MoveTo(g_seats[g_activeSeat].pos);   // forces a redraw
+        UpdateShellCursorFallback(g_activeSeat);
+    }
+    for (int i = 0; i < g_cfg.seatCount; ++i)
+        if (i != g_activeSeat) g_overlay[i].MoveTo(g_seats[i].pos);
     ReassertArrows();
-    if (g_menuTimerWnd) SetTimer(g_menuTimerWnd, kMenuSettleTimer, 80, nullptr);
+}
+
+// A menu opens (or closes) over the arrows: re-read the state at once, then
+// again at 30, 80 and 200 ms. Bounded, so nothing is reasserted permanently
+// (the once-a-second pass of OP8 stays the only steady one).
+void CALLBACK MenuPopupEvent(HWINEVENTHOOK, DWORD event, HWND, LONG, LONG, DWORD, DWORD) {
+    const DWORD now = GetTickCount();
+    if (g_verbose || g_perfLog)
+        LogLine(L"[menu] popup %s, %lu ms after the tray click",
+                event == EVENT_SYSTEM_MENUPOPUPSTART ? L"start" : L"end",
+                (unsigned long)(g_trayClickTick ? now - g_trayClickTick : 0));
+    g_menuEventTick = now;
+    RefreshArrowsNow();
+    g_menuStage = 0;
+    if (g_menuTimerWnd) SetTimer(g_menuTimerWnd, kMenuSettleTimer, kMenuStageDelay[0], nullptr);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case kTrayCallbackMsg:
-        if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU || lp == WM_LBUTTONUP)
+        if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU || lp == WM_LBUTTONUP) {
+            g_trayClickTick = GetTickCount();
             TrayMenu(hwnd);
+        }
         return 0;
     case WM_INPUT: {
         g_heartbeat.fetch_add(1);
@@ -1700,9 +1733,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             Rescan();
             return 0;
         }
-        if (wp == kMenuSettleTimer) {       // second pass after a menu popped up
-            KillTimer(hwnd, kMenuSettleTimer);
-            ReassertArrows();
+        if (wp == kMenuSettleTimer) {       // follow-up pass after a menu event
+            RefreshArrowsNow();
+            if (g_verbose || g_perfLog)
+                LogLine(L"[menu] pass %d, %lu ms after the menu event", g_menuStage + 1,
+                        (unsigned long)(GetTickCount() - g_menuEventTick));
+            if (++g_menuStage < kMenuStages)
+                SetTimer(hwnd, kMenuSettleTimer, kMenuStageDelay[g_menuStage], nullptr);
+            else
+                KillTimer(hwnd, kMenuSettleTimer);
             return 0;
         }
         if (wp == 2) {                      // auto-exit timer
@@ -2782,7 +2821,7 @@ int RunMain(HINSTANCE inst) {
     std::thread watchdog(WatchdogThread);
 
     g_menuTimerWnd = g_hwnd;
-    HWINEVENTHOOK menuHook = SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPSTART,
+    HWINEVENTHOOK menuHook = SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPEND,
                                              nullptr, MenuPopupEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
     if (!menuHook) LogLine(L"[menu] SetWinEventHook failed: %lu", GetLastError());
 
