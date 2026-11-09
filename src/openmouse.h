@@ -36,6 +36,11 @@ constexpr UINT  kLearnMsg = WM_APP + 3;
 constexpr UINT  kLearnedMsg = WM_APP + 4;
 constexpr LPARAM kLearnHeard = 1, kLearnNothing = 2, kLearnAbsent = 3;   // absent: that mouse is not plugged in
 constexpr DWORD  kLearnListenMs = 8000;
+// Engine <-> settings window, both ways. Settings -> engine (any wParam): tell
+// me which mice are plugged in. Engine -> settings: wParam = bit mask of the
+// seats whose mouse is plugged in; sent after every change of devices and when
+// asked. The settings window then re-reads the ini for the seats it lacks.
+constexpr UINT  kSeatsMsg = WM_APP + 6;
 
 // ---------------------------------------------------------------- device id
 

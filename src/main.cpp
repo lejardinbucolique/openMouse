@@ -2038,11 +2038,22 @@ void ApplyBindings() {
     RefreshMapFlags();
 }
 
+// Tells the settings window, when it is open, which mice are plugged in.
+void NotifySeats() {
+    HWND w = FindWindowW(kSettingsClassName, nullptr);
+    if (!w) return;
+    WPARAM mask = 0;
+    for (int i = 0; i < kMaxSeats; ++i)
+        if (g_seatPresent[i]) mask |= (WPARAM)1 << i;
+    PostMessageW(w, kSeatsMsg, mask, 0);
+}
+
 // The mice that are plugged in, and the touchpad rule, applied to the seats.
 void Rescan() {
     ApplyBindings();
     CreateNewSeats();      // a mouse seen for the first time: its pointer
     SyncSeatArrows();      // a mouse back or gone: its arrow shows or hides
+    NotifySeats();         // the settings window follows, if it is open
 }
 
 // ---------------------------------------------------------------- window
@@ -2264,6 +2275,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case kAutostartMsg:
         return OnAutostart(wp);
+    case kSeatsMsg:
+        NotifySeats();
+        return 0;
     case kLearnMsg:
         // The settings window asks to listen to one mouse (wParam = seat + 1),
         // or to stop (0).
@@ -3352,6 +3366,7 @@ int RunMain(HINSTANCE inst) {
     // create or delete the one task that starts this same executable.
     ChangeWindowMessageFilterEx(g_hwnd, kAutostartMsg, MSGFLT_ALLOW, nullptr);
     ChangeWindowMessageFilterEx(g_hwnd, kLearnMsg, MSGFLT_ALLOW, nullptr);
+    ChangeWindowMessageFilterEx(g_hwnd, kSeatsMsg, MSGFLT_ALLOW, nullptr);   // only makes us answer
 
     ApplyBindings();
     ResolveSeatBounds();
