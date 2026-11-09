@@ -163,6 +163,9 @@ bool Config::Load(const std::wstring& path) {
             if      (key == L"seats")             seatCount        = _wtoi(val.c_str());
             else if (key == L"capture_keyboards") captureKeyboards = (val == L"1" || val == L"true");
             else if (key == L"mark_active_seat")  markActiveSeat   = (val == L"1" || val == L"true");
+            else if (key == L"touchpad")
+                touchpad = (val == L"on")  ? Touchpad::On
+                         : (val == L"off") ? Touchpad::Off : Touchpad::Auto;
         } else if (section == L"mouse") {
             mouseBinding[key] = _wtoi(val.c_str());
         } else if (section == L"keyboard") {
@@ -200,6 +203,8 @@ bool Config::Save(const std::wstring& path) const {
 
     t += L"[general]\n";
     t += L"seats=" + std::to_wstring(seatCount) + L"\n";
+    t += L"touchpad=" + std::wstring(touchpad == Touchpad::On ? L"on"
+                                   : touchpad == Touchpad::Off ? L"off" : L"auto") + L"\n";
     t += L"capture_keyboards=" + std::wstring(captureKeyboards ? L"1" : L"0") + L"\n";
     t += L"mark_active_seat="  + std::wstring(markActiveSeat  ? L"1" : L"0") + L"\n\n";
 

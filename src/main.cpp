@@ -55,7 +55,7 @@ HINSTANCE                 g_inst = nullptr;  // for the overlays created at run 
 
 // Seats are created while the engine runs, one per newly seen mouse. Ready:
 // state and overlay exist. Present: a bound mouse is plugged in right now.
-// A seat whose mouse is unplugged keeps its arrow where it was.
+// A seat whose mouse is unplugged hides its arrow, kept for its return.
 bool                      g_seatReady[kMaxSeats]   = {};
 bool                      g_seatPresent[kMaxSeats] = {};
 bool                      g_captureActive = false;
@@ -1247,15 +1247,40 @@ void CreateNewSeats() {
     }
 }
 
-// A seat's arrow shows once its mouse is plugged in, and then stays: unplugging
-// leaves it where it stopped (no flicker, nothing to jump back from).
-void ShowPresentSeats() {
+int FirstPresentSeat() {
+    for (int i = 0; i < g_cfg.seatCount; ++i)
+        if (g_seatReady[i] && g_seatPresent[i]) return i;
+    return -1;
+}
+
+// A seat's arrow follows its mouse: shown while it is plugged in, hidden (not
+// destroyed, so the seat keeps its colour and speed) once it is unplugged, and
+// shown again where it stopped. Never hides the last arrow: with no seat
+// present at all, the one left stays, so the screen is not left without one.
+void SyncSeatArrows() {
+    const int first = FirstPresentSeat();
+    if (first < 0) return;
+    // The seat that owns the real cursor is gone: a present one takes it over.
+    if (g_activeSeat < 0 || g_activeSeat >= g_cfg.seatCount || !g_seatPresent[g_activeSeat])
+        SetActiveSeat(first);
     for (int i = 0; i < g_cfg.seatCount; ++i) {
-        if (!g_seatReady[i] || !g_seatPresent[i] || g_overlay[i].IsVisible()) continue;
-        // The owner draws through the real cursor unless that one is hidden.
-        if (i == g_activeSeat && (!g_cursorHidden || g_overShell)) continue;
-        g_overlay[i].MoveTo(g_seats[i].pos);
-        g_overlay[i].Show(true);
+        if (!g_seatReady[i]) continue;
+        if (g_seatPresent[i]) {
+            if (g_overlay[i].IsVisible()) continue;
+            // The owner draws through the real cursor unless that one is hidden.
+            if (i == g_activeSeat && (!g_cursorHidden || g_overShell)) continue;
+            g_overlay[i].MoveTo(g_seats[i].pos);
+            g_overlay[i].Show(true);
+        } else {
+            // A button still held by the unplugged mouse would stay pressed for good.
+            Seat& st = g_seats[i];
+            if (st.lDown)  { SendMouseAt(st.pos, MOUSEEVENTF_LEFTUP);   st.lDown = false; }
+            if (st.rDown)  { SendMouseAt(st.pos, MOUSEEVENTF_RIGHTUP);  st.rDown = false; }
+            if (st.mDown)  { SendMouseAt(st.pos, MOUSEEVENTF_MIDDLEUP); st.mDown = false; }
+            if (st.x1Down) { SendMouseAt(st.pos, MOUSEEVENTF_XUP, XBUTTON1); st.x1Down = false; }
+            if (st.x2Down) { SendMouseAt(st.pos, MOUSEEVENTF_XUP, XBUTTON2); st.x2Down = false; }
+            if (g_overlay[i].IsVisible()) g_overlay[i].Show(false);
+        }
     }
 }
 
@@ -1346,6 +1371,88 @@ void SeatNewMice(const std::vector<DeviceInfo>& devices,
         LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
 }
 
+// The laptop touchpad is seated by rule, not as a mouse, so that there are
+// always two arrows to work with:
+//   - no external mouse : the touchpad alone;
+//   - one external mouse: that mouse and the touchpad;
+//   - two or more       : the mice only, the touchpad is cut off.
+// touchpad=on / off in the ini overrides this (off still yields to the safety
+// rule: with no external mouse the touchpad is kept, never leave no pointer).
+// A touchpad keeps its seat in the ini while it is cut off, so it comes back
+// with the same colour and speed. Only one interface of it is ever seated.
+void SeatTouchpad(const std::vector<DeviceInfo>& devices,
+                  std::map<std::wstring, const wchar_t*>& deadWhy,
+                  std::set<std::wstring>& cutOff) {
+    std::set<int> externalSeats;
+    for (const auto& d : devices) {
+        if (d.type != RIM_TYPEMOUSE || IsIntegratedPointer(d.path)) continue;
+        const auto it = g_cfg.mouseBinding.find(d.path);
+        if (it != g_cfg.mouseBinding.end()) externalSeats.insert(it->second);
+    }
+    const size_t externals = externalSeats.size();
+    const bool active = g_cfg.touchpad == Config::Touchpad::On ||
+                        (g_cfg.touchpad == Config::Touchpad::Auto && externals <= 1) ||
+                        externals == 0;
+
+    static int lastState = -1;   // -1 unknown, else 0 cut off / 1 seated; logged on change only
+    std::set<std::wstring> seen;
+    bool changed = false;
+    for (const auto& d : devices) {
+        if (d.type != RIM_TYPEMOUSE || !IsIntegratedPointer(d.path)) continue;
+        // A second interface of the same touchpad is a ghost of the first.
+        std::wstring base = HardwareBase(d.path);
+        if (base.empty()) base = d.path;
+        if (!seen.insert(base).second) {
+            deadWhy[d.path] = L"other interface of the touchpad";
+            cutOff.insert(d.path);
+            continue;
+        }
+        if (!active) {
+            deadWhy[d.path] = L"touchpad cut off";
+            cutOff.insert(d.path);
+            continue;
+        }
+        if (g_cfg.mouseBinding.count(d.path)) continue;
+        // Same touchpad under a new instance id: take over its seat.
+        bool taken = false;
+        for (auto it = g_cfg.mouseBinding.begin(); it != g_cfg.mouseBinding.end(); ++it) {
+            if (!IsIntegratedPointer(it->first) || HardwareBase(it->first) != base) continue;
+            const int seat = it->second;
+            g_cfg.mouseBinding.erase(it);
+            g_cfg.mouseBinding[d.path] = seat;
+            taken = changed = true;
+            break;
+        }
+        if (taken) continue;
+        std::set<int> usedSeats;
+        for (const auto& kv : g_cfg.mouseBinding) usedSeats.insert(kv.second);
+        int seat = -1;
+        for (int k = 0; k < kMaxSeats; ++k)
+            if (!usedSeats.count(k)) { seat = k; break; }
+        if (seat < 0) {
+            deadWhy[d.path] = L"all seats are taken";
+            cutOff.insert(d.path);
+            LogLine(L"[warn] touchpad %s : no seat left (%d seats)", d.friendlyName.c_str(), kMaxSeats);
+            continue;
+        }
+        if (seat >= g_cfg.seatCount) AddSeatConfig(seat);
+        g_cfg.mouseBinding[d.path] = seat;
+        changed = true;
+        LogLine(L"[new] touchpad seat %d  %s  (%d seats)", seat, d.friendlyName.c_str(),
+                g_cfg.seatCount);
+    }
+    if (seen.empty()) return;
+    if (lastState != (active ? 1 : 0)) {
+        lastState = active ? 1 : 0;
+        LogLine(L"[touchpad] %s  (%u external mice, mode %s)",
+                active ? L"seated" : L"cut off", (unsigned)externals,
+                g_cfg.touchpad == Config::Touchpad::On ? L"on"
+              : g_cfg.touchpad == Config::Touchpad::Off ? L"off" : L"auto");
+    }
+    if (changed && !g_cfg.Save(Config::DefaultPath()))
+        LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
+}
+
 // Without any measured binding the assignment is a runtime guess, never
 // written back: this machine exposed four HID mouse interfaces for two
 // physical mice, and persisting a guess would be indistinguishable from what
@@ -1390,12 +1497,16 @@ void ApplyBindings() {
         LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
 
     std::map<std::wstring, const wchar_t*> deadWhy;
-    if (haveMouseCfg) SeatNewMice(devices, deadWhy);
+    std::set<std::wstring> cutOff;   // touchpad interfaces kept dead whatever the ini says
+    if (haveMouseCfg) {
+        SeatNewMice(devices, deadWhy);
+        SeatTouchpad(devices, deadWhy, cutOff);
+    }
 
     for (const auto& d : devices) {
         if (d.type == RIM_TYPEMOUSE) {
             auto it = g_cfg.mouseBinding.find(d.path);
-            if (it != g_cfg.mouseBinding.end()) {
+            if (it != g_cfg.mouseBinding.end() && !cutOff.count(d.path)) {
                 g_mouseSeat[d.handle] = it->second;
                 LogLine(L"[bind] mouse    seat %d  %s", it->second, d.friendlyName.c_str());
             } else if (haveMouseCfg) {
@@ -1440,6 +1551,13 @@ void ApplyBindings() {
         if (kv.second >= 0 && kv.second < kMaxSeats) g_seatPresent[kv.second] = true;
 }
 
+// The mice that are plugged in, and the touchpad rule, applied to the seats.
+void Rescan() {
+    ApplyBindings();
+    CreateNewSeats();      // a mouse seen for the first time: its pointer
+    SyncSeatArrows();      // a mouse back or gone: its arrow shows or hides
+}
+
 // ---------------------------------------------------------------- window
 
 void TrayMenu(HWND hwnd);   // defined with the other tray plumbing below
@@ -1466,6 +1584,8 @@ void ReloadSettings() {
     }
     g_cfg.sensitivity = fresh.sensitivity;
     g_cfg.accel       = fresh.accel;
+    const bool padChanged = g_cfg.touchpad != fresh.touchpad;
+    g_cfg.touchpad    = fresh.touchpad;
     g_cfg.screen      = fresh.screen;
     ResolveSeatBounds();
     ReclampSeats();
@@ -1478,6 +1598,7 @@ void ReloadSettings() {
         else
             LogLine(L"[settings] seat %d sensitivity %.2f", i, k);
     }
+    if (padChanged) Rescan();   // the touchpad is seated or cut off at once
 }
 
 // Peak of each step within one event, and a per-step breakdown of any event
@@ -1576,9 +1697,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         TimerProbe probe(wp);
         if (wp == 3) {                      // coalesced device-change rescan
             KillTimer(hwnd, 3);
-            ApplyBindings();
-            CreateNewSeats();      // a mouse seen for the first time: its pointer
-            ShowPresentSeats();    // a mouse back after an absence: its arrow
+            Rescan();
             return 0;
         }
         if (wp == kMenuSettleTimer) {       // second pass after a menu popped up
@@ -2612,7 +2731,8 @@ int RunMain(HINSTANCE inst) {
     GetCursorPos(&start);
     for (int i = 0; i < g_cfg.seatCount; ++i)
         InitSeat(i, { start.x + i * 40, start.y + i * 24 });
-    g_activeSeat = 0;
+    g_activeSeat = FirstPresentSeat();   // the arrows of absent mice start hidden
+    if (g_activeSeat < 0) g_activeSeat = 0;
 
     // Decide this before showing the overlays: if the hardware cursor can be
     // hidden, every seat draws itself; if not, seat 0 keeps the system cursor
@@ -2620,9 +2740,12 @@ int RunMain(HINSTANCE inst) {
     const bool hidden = HideSystemCursor();
     if (!hidden)
         LogLine(L"[cursor] could not hide — falling back to snap-back correction (expect jitter)");
-    // A seat whose mouse is not plugged in has no arrow until it is.
+    // A seat whose mouse is not plugged in has no arrow until it is. With no
+    // seat present at all, the first one keeps its arrow.
+    const bool anyPresent = FirstPresentSeat() >= 0;
     for (int i = 0; i < g_cfg.seatCount; ++i)
-        g_overlay[i].Show((hidden || i != 0) && (i == 0 || g_seatPresent[i]));
+        g_overlay[i].Show((hidden || i != g_activeSeat) &&
+                          (anyPresent ? g_seatPresent[i] : i == 0));
 
     if (!RegisterCapture(g_hwnd, g_cfg.captureKeyboards)) return 1;
 

@@ -119,6 +119,10 @@ bool IsAutoSeatCandidate(const std::wstring& path) {
            p.find(L"vid&") != std::wstring::npos;      // Bluetooth
 }
 
+bool IsIntegratedPointer(const std::wstring& path) {
+    return !IsAutoSeatCandidate(path);
+}
+
 std::vector<DeviceInfo> EnumerateDevices() {
     std::vector<DeviceInfo> result;
 

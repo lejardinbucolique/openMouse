@@ -178,6 +178,7 @@ file for now.
 ```ini
 [general]
 seats=2
+touchpad=auto         ; auto | on | off, see below
 capture_keyboards=0
 mark_active_seat=1
 
@@ -223,10 +224,19 @@ no setting and no command: it takes the first seat that has no mouse in the ini,
 seat (up to eight), with its own arrow, a colour that stands out from the other seats and
 the speed settings of seat 0. The assignment is written to the ini, so the mouse finds the
 same seat and colour the next time, on any USB port. The arrows follow the mice: plug one
-in and its arrow appears; unplug it and the arrow stays where it stopped.
+in and its arrow appears; unplug it and its arrow disappears (the seat keeps its colour
+and speed, and the arrow comes back where it stopped). The last arrow is never hidden.
 
-Never seated on their own, and dropped as before: integrated devices (ACPI touchpads,
-PS/2) and interfaces with no manufacturer id, other collections (`MI_`/`Col` suffix) of a
+The laptop touchpad (integrated ACPI/PS/2 device) completes the mice so that there are
+always two arrows, re-evaluated at every plug and unplug, with no restart: no external
+mouse, the touchpad alone; one external mouse, that mouse and the touchpad; two or more,
+the mice only and the touchpad is cut off. `touchpad=on` keeps it seated whatever the
+number of mice, `touchpad=off` cuts it off (except when no external mouse is left, so the
+computer is never without a pointer). It gets a seat of its own, written to the ini like
+any other.
+
+Never seated on their own, and dropped as before: interfaces with no manufacturer id other
+than the touchpad, other collections (`MI_`/`Col` suffix) of a
 mouse that already has a seat, and every collection but one of a new product. List such a
 device in `[mouse]` by hand to seat it anyway. On a first run with no bindings at all,
 devices are auto-assigned round-robin so nothing is dead out of the box, but run

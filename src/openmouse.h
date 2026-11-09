@@ -68,6 +68,10 @@ std::wstring HardwareBase(const std::wstring& path);
 // no manufacturer id (I2C touchpads), which only an ini entry can seat.
 bool IsAutoSeatCandidate(const std::wstring& path);
 
+// An integrated pointing device (laptop touchpad, PS/2): the opposite of an
+// auto-seat candidate. It is seated by the touchpad rule, never as a mouse.
+bool IsIntegratedPointer(const std::wstring& path);
+
 // ---------------------------------------------------------------- seats
 
 struct Seat {
@@ -143,6 +147,13 @@ struct Config {
     bool markActiveSeat = true;
 
     int  seatCount = 2;
+
+    // What the laptop touchpad does. Auto: it completes the mice so that two
+    // arrows always exist (alone with no external mouse, beside a single one,
+    // cut off from two onwards). On: always seated. Off: never, unless no
+    // external mouse is left, so the computer is never without a pointer.
+    enum class Touchpad { Auto, On, Off };
+    Touchpad touchpad = Touchpad::Auto;
 
     // Grows the per-seat tables to hold n seats. A slot that did not exist
     // gets a colour that stands out from the seats already there.
