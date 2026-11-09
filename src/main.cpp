@@ -830,8 +830,15 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
     if (g_deadMice.count(dev))                { return; }   // ghost interface
 
     auto it = g_mouseSeat.find(dev);
-    // Unbound devices drive seat 0 rather than being dropped, so plugging in a
-    // new mouse never leaves the user with dead hardware.
+    // A device not yet bound (plugged in within the rescan window) must not
+    // drive seat 0 once measured bindings exist; it is ignored until bound.
+    if (it == g_mouseSeat.end() && !g_cfg.mouseBinding.empty()) {
+        ++g_unboundEvents;
+        if (g_verbose) LogLine(L"[ignored] unbound mouse %p, event dropped", dev);
+        return;
+    }
+    // With no measured binding at all, unbound devices drive seat 0 so a
+    // first run never leaves the user with dead hardware.
     const int seat = (it != g_mouseSeat.end()) ? it->second : 0;
     if (seat < 0 || seat >= g_cfg.seatCount) return;
 
