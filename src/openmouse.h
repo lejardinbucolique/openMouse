@@ -285,6 +285,34 @@ int  RunSettings(HINSTANCE inst);
 // settings window then speak French, otherwise English.
 bool UiFrench();
 
+// ---------------------------------------------------------------- autostart
+
+// "Start with Windows": a scheduled task, run at logon at the highest level.
+// Posted or sent to the engine window by the settings window. wParam is the
+// request (kAutostart*). The answer is the LRESULT of a SendMessage: a
+// combination of kAuto* flags describing the engine and the task as it knows
+// them. Enable and disable are only accepted by an elevated engine, which does
+// the work on a thread of its own; the caller polls with kAutostartQuery.
+constexpr UINT    kAutostartMsg     = WM_APP + 5;
+constexpr WPARAM  kAutostartQuery   = 0;
+constexpr WPARAM  kAutostartEnable  = 1;
+constexpr WPARAM  kAutostartDisable = 2;
+constexpr LRESULT kAutoKnown    = 1;   // the engine has read the task state
+constexpr LRESULT kAutoPresent  = 2;   // the task exists
+constexpr LRESULT kAutoElevated = 4;   // the engine may create or delete it
+
+bool IsElevated();
+// 1: the task exists, 0: it does not, -1: this process may not see it.
+int  AutostartState();
+// Both need administrator rights.
+bool AutostartInstall();
+bool AutostartRemove();
+// openmouse.exe --autostart=on|off, started elevated by the settings window.
+int  RunAutostartHelper(bool enable);
+// openmouse.exe --autostart=dry-run: prints the task definition that would be
+// registered and the state of the task as it is now. Registers nothing.
+int  RunAutostartDryRun();
+
 // ---------------------------------------------------------------- utilities
 
 RECT VirtualScreenRect();

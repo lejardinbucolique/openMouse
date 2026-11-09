@@ -2040,6 +2040,58 @@ void ReassertArrows() {
     }
 }
 
+// ---------------------------------------------------------------- start with Windows
+
+// Set by --startup, which only the logon task passes.
+bool g_startup = false;
+
+std::atomic<int>  g_autoState{-2};   // -2 not read yet, -1 unknown, 0 no task, 1 task
+std::atomic<bool> g_autoBusy{false};
+
+// The Task Scheduler is asked on threads of their own: this thread carries
+// every mouse of the machine and must not wait on an RPC.
+void AutostartWork(WPARAM request) {
+    if (request == kAutostartEnable)       AutostartInstall();
+    else if (request == kAutostartDisable) AutostartRemove();
+    g_autoState = AutostartState();
+    g_autoBusy  = false;
+}
+
+LRESULT OnAutostart(WPARAM request) {
+    static const bool elevated = IsElevated();
+    // A change is only taken by an elevated engine, one at a time. The
+    // settings window sees the outcome by asking again.
+    if (request != kAutostartQuery && elevated && !g_autoBusy.exchange(true))
+        std::thread(AutostartWork, request).detach();
+    const int st = g_autoState;
+    LRESULT r = 0;
+    if (st >= 0 && !g_autoBusy) r |= kAutoKnown;
+    if (st == 1)                r |= kAutoPresent;
+    if (elevated)               r |= kAutoElevated;
+    return r;
+}
+
+// At logon the task fires before the shell has drawn the desktop and before
+// every mouse is enumerated. Hiding the hardware cursor then could leave a
+// screen with no pointer at all, so wait for the taskbar and for one mouse to
+// exist. After 40 s start anyway: the rescan on device change picks up the
+// late ones, and the watchdog and --restore-cursor still give the pointer back.
+void WaitForDesktop() {
+    const DWORD t0 = GetTickCount();
+    bool shell = false, mouse = false;
+    while (GetTickCount() - t0 < 40000) {
+        if (!shell) shell = FindWindowW(L"Shell_TrayWnd", nullptr) != nullptr;
+        if (!mouse)
+            for (const auto& d : EnumerateDevices())
+                if (d.type == RIM_TYPEMOUSE) { mouse = true; break; }
+        if (shell && mouse) break;
+        Sleep(500);
+    }
+    LogLine(L"[startup] desktop %s, mouse %s after %lu ms", shell ? L"ready" : L"NOT ready",
+            mouse ? L"found" : L"NOT found", GetTickCount() - t0);
+    Sleep(1500);   // the shell is still settling when its window first exists
+}
+
 constexpr UINT_PTR kMenuSettleTimer = 4;
 HWND  g_menuTimerWnd = nullptr;
 DWORD g_trayClickTick = 0;            // when the tray icon was clicked, to time the menu
@@ -2112,6 +2164,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ReloadSettings();
         return 0;
 
+    case kAutostartMsg:
+        return OnAutostart(wp);
     case kLearnMsg:
         // The settings window asks to listen to one mouse (wParam = seat + 1),
         // or to stop (0).
@@ -3167,8 +3221,17 @@ int RunMain(HINSTANCE inst) {
     // anything else — this build normally holds no clip at all.
     ClipCursor(nullptr);
 
+    // The logon task must never leave two engines on the machine, e.g. when
+    // one was started by hand before the task fired.
+    if (g_startup && FindWindowW(L"openMouse.Engine", nullptr)) {
+        LogLine(L"[startup] an engine is already running — nothing to do");
+        return 0;
+    }
+
     g_inst = inst;
     g_cfg.Load(Config::DefaultPath());
+    if (g_startup) WaitForDesktop();
+    std::thread([] { g_autoState = AutostartState(); }).detach();
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);
@@ -3187,6 +3250,9 @@ int RunMain(HINSTANCE inst) {
     // elevated; let its reload request through the privilege filter. All it
     // does is make us re-read a file that window could write anyway.
     ChangeWindowMessageFilterEx(g_hwnd, kReloadSettingsMsg, MSGFLT_ALLOW, nullptr);
+    // Same for the start-with-Windows request. It can only make this program
+    // create or delete the one task that starts this same executable.
+    ChangeWindowMessageFilterEx(g_hwnd, kAutostartMsg, MSGFLT_ALLOW, nullptr);
     ChangeWindowMessageFilterEx(g_hwnd, kLearnMsg, MSGFLT_ALLOW, nullptr);
 
     ApplyBindings();
@@ -3214,7 +3280,10 @@ int RunMain(HINSTANCE inst) {
         g_overlay[i].Show((hidden || i != g_activeSeat) &&
                           (anyPresent ? g_seatPresent[i] : i == 0));
 
-    if (!RegisterCapture(g_hwnd, g_cfg.captureKeyboards)) return 1;
+    if (!RegisterCapture(g_hwnd, g_cfg.captureKeyboards)) {
+        RestoreSystemCursor();   // never leave a desktop without a pointer
+        return 1;
+    }
 
     // The gate is what stops physical clicks reaching apps alongside our
     // injections. Without it every click is delivered twice, so its failure
@@ -3226,6 +3295,7 @@ int RunMain(HINSTANCE inst) {
         UnregisterCapture();
         if (g_gateThreadId) PostThreadMessageW(g_gateThreadId, WM_QUIT, 0, 0);
         gate.join();
+        RestoreSystemCursor();
         return 1;
     }
 
@@ -3314,6 +3384,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             om::g_perfLog = true;
         else if (a == L"--cage")
             om::g_eatMoves = false;   // force the old ClipCursor behaviour
+        else if (a == L"--startup")
+            om::g_startup = true;     // started by the logon task
+        else if (a == L"--autostart=on" || a == L"--autostart=off" || a == L"--autostart=dry-run")
+            mode = a;
         else if (a.rfind(L"--seconds=", 0) == 0)
             om::g_runSeconds = _wtoi(a.c_str() + 10);
         else if (a.rfind(L"--janitor=", 0) == 0)
@@ -3325,6 +3399,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     // A window, not a console tool: no console to attach to or allocate.
     if (mode == L"--settings") return om::RunSettings(inst);
+    if (mode == L"--autostart=on" || mode == L"--autostart=off")
+        return om::RunAutostartHelper(mode == L"--autostart=on");
 
     if (mode == L"--identify" || mode == L"--watch") {
         // Needs its own visible window: it is a dialogue with the person at
@@ -3343,6 +3419,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         }
     }
 
+    if (mode == L"--autostart=dry-run") return om::RunAutostartDryRun();
     if (mode == L"--list")       return om::RunList();
     if (mode == L"--probe")      return om::RunProbe();
     if (mode == L"--probe-echo") return om::RunProbeEcho();
@@ -3369,6 +3446,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"  Run flags:  --verbose        per-event tracing to the log");
         om::LogLine(L"              --seconds=N     auto-exit after N seconds");
         om::LogLine(L"              --perf          input latency figures every 2 s");
+        om::LogLine(L"              --startup       what the logon task passes: wait for the desktop first");
+        om::LogLine(L"  openmouse.exe --autostart=on|off  create or delete the logon task (needs administrator)");
+        om::LogLine(L"  openmouse.exe --autostart=dry-run  print the task that would be created, change nothing");
         om::LogLine(L"");
         om::LogLine(L"  Panic key while running: Ctrl+Alt+Shift+Q");
         om::LogLine(L"  Tray icon: click for settings, to stop, re-identify, or open the log folder");

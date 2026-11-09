@@ -105,7 +105,7 @@ a different and much larger project.
 |---|---|
 | Operating system | Windows 10 or 11, x64. Windows 8 is the theoretical minimum (Magnification API) but is untested. |
 | Architecture | x64 only. The Magnification API is not supported under WOW64, so a 32-bit build will not work correctly. |
-| Privileges | Runs as a normal user. No administrator rights, no driver, no signing requirements. |
+| Privileges | Runs as a normal user. No driver, no signing requirements. Administrator rights are only needed to steer elevated windows (Task Manager) and to create the optional logon task. |
 | Hardware | Two or more mice. Any HID mouse should work; wireless receivers that expose several HID collections are handled by `--identify`. |
 | Displays | Multi-monitor supported, including negative coordinates. Mixed-DPI setups are handled but lightly tested. |
 
@@ -116,7 +116,8 @@ natively through X11's Multi-Pointer X.
 ## Installation
 
 Download or build `openmouse.exe` (see [Building](#building)) and run it. There is no
-installer and nothing is written outside `%APPDATA%\openMouse`.
+installer and nothing is written outside `%APPDATA%\openMouse`, except the optional
+logon task (see [Starting with Windows](#starting-with-windows)).
 
 ## Setup
 
@@ -313,12 +314,36 @@ Each arrow that moves costs about 0.2 to 0.3 ms per flush (measured, 1 to 8 over
 | `--receiver` | Open a window that logs the mouse messages it receives |
 | `--monitor` | Log system-wide button events with provenance |
 | `--restore-cursor` | Restore a system cursor left hidden |
+| `--autostart=on` / `off` | Create or delete the logon task (needs administrator; the settings window runs it for you) |
+| `--autostart=dry-run` | Print the task definition that would be registered and the task's current state; registers nothing |
 | `--help` | Usage summary |
 
 Run flags: `--verbose` enables per-event tracing to the log, `--seconds=N` exits after N
-seconds, `--cage` forces the legacy cursor-clipping strategy.
+seconds, `--cage` forces the legacy cursor-clipping strategy, `--startup` is what the
+logon task passes (see below).
 
 Logs are written to `%APPDATA%\openMouse\openmouse.log` and rotate at 4 MB.
+
+### Starting with Windows
+
+The settings window has a **General** section with the box "Start openMouse with
+Windows". It is off unless you tick it; openMouse never installs itself otherwise.
+
+Ticking it creates a Windows scheduled task named `openMouse`, triggered when you log on,
+that runs `openmouse.exe --startup` with the highest run level available to you. A Run
+registry key would not do: it starts without elevation, and an engine that is not elevated
+cannot steer windows that are (Task Manager). Unticking the box deletes the task, and
+nothing else is left behind. The box always shows the real state of the task.
+
+Creating or deleting the task needs administrator rights. When the engine is already
+running as administrator it does it silently; otherwise Windows asks for permission once
+for that change. The task only ever starts this same executable, from the folder it was
+ticked in: moving `openmouse.exe` afterwards means untick and tick again. You can see or
+remove the task by hand in the Task Scheduler, or with `schtasks /Delete /TN openMouse /F`.
+
+At logon `--startup` waits (40 s at most) for the taskbar and for one mouse to exist before
+hiding the hardware cursor, and does nothing if an engine is already running. If it fails
+to start, the watchdog and `--restore-cursor` give the normal pointer back.
 
 ## Safety
 

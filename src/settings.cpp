@@ -18,6 +18,7 @@
 // The panel only hosts the controls and forwards their notifications.
 #include "openmouse.h"
 #include <commctrl.h>
+#include <shellapi.h>   // ShellExecuteEx — not pulled in by WIN32_LEAN_AND_MEAN
 #include <cstdio>
 #include <cmath>
 
@@ -46,7 +47,9 @@ enum Str {
     sScreenItem, sPrimary, sUnplugged, sDefaults, sUndo, sClose, sHint, sApplied, sNotRunning, sSaveFailed,
     sLearn, sForget, sListening, sNothing, sAbsent, sEngineOff, sLearned, sAlready, sFull,
     sNoButtons, sNative, sActNone, sActLeft, sActRight, sActMiddle, sActBack, sActForward, sActKeys,
-    sKeysNone, sKeysCapture, sWin, sCtrlName, sAltName, sShiftName, sWinName, sStrCount
+    sKeysNone, sKeysCapture, sWin, sCtrlName, sAltName, sShiftName, sWinName,
+    sGeneral, sAutostart, sAutostartOn, sAutostartOff, sAutostartWait, sAutostartFail,
+    sAutostartDenied, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -95,6 +98,13 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Press the shortcut…",
     L"Win +",
     L"Ctrl", L"Alt", L"Shift", L"Win",
+    L"General",
+    L"Start openMouse with Windows",
+    L"openMouse will start by itself when you log on to Windows.",
+    L"openMouse will no longer start with Windows.",
+    L"Waiting for Windows to confirm…",
+    L"Windows did not take the change. Run openMouse as administrator and try again.",
+    L"Cancelled: administrator permission was refused, nothing changed.",
 };
 
 const wchar_t* const kStrFr[sStrCount] = {
@@ -143,6 +153,13 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Appuie sur le raccourci…",
     L"Win +",
     L"Ctrl", L"Alt", L"Maj", L"Win",
+    L"Général",
+    L"Lancer openMouse au démarrage de Windows",
+    L"openMouse se lancera tout seul à l'ouverture de votre session Windows.",
+    L"openMouse ne se lancera plus avec Windows.",
+    L"En attente de la confirmation de Windows…",
+    L"Windows n'a pas pris le changement. Lancez openMouse en administrateur et recommencez.",
+    L"Annulé : l'autorisation administrateur a été refusée, rien n'a changé.",
 };
 
 const wchar_t* S(Str id) { return (UiFrench() ? kStrFr : kStrEn)[id]; }
@@ -166,11 +183,12 @@ constexpr int kPerSeat   = 32;
 constexpr int kIdBase    = 1000;
 constexpr int kIdUndo    = 900;
 constexpr int kIdClose   = 901;
+constexpr int kIdAutostart = 902;
 enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
                cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget };
 int CtlId(int seat, int ctl) { return kIdBase + seat * kPerSeat + ctl; }
 
-constexpr UINT_PTR kTimerApply = 1, kTimerLearn = 2;
+constexpr UINT_PTR kTimerApply = 1, kTimerLearn = 2, kTimerAutostart = 3;
 constexpr UINT_PTR kSubclassKeys = 1;
 
 // ---------------------------------------------------------------- state
@@ -191,6 +209,12 @@ struct State {
     SeatUi  ui[kMaxSeats];
     HWND    panel = nullptr;
     HWND    hint = nullptr, status = nullptr, undo = nullptr, close = nullptr;
+    HWND    autostart = nullptr;     // "start with Windows", in the general section
+    RECT    general{};               // title of the general section, painted by the window
+    bool    autoWait = false;        // a change is in flight, polled by kTimerAutostart
+    bool    autoWant = false;
+    int     autoTries = 0;
+    HANDLE  autoHelper = nullptr;    // the elevated one-shot copy, when the engine could not do it
     HFONT   font = nullptr, bold = nullptr;
     UINT    dpi = 96;
     bool    pending = false;
@@ -285,6 +309,82 @@ void Apply() {
 void ApplySoon(HWND hwnd) {
     g.pending = true;
     SetTimer(hwnd, kTimerApply, 150, nullptr);
+}
+
+// ---------------------------------------------------------------- start with Windows
+
+// The engine, when it is running elevated, is the one that owns the task: it
+// can create and delete it without a prompt. Otherwise a one-shot elevated copy
+// of this program does it, which costs one UAC prompt, once per change.
+bool AskEngine(WPARAM request, DWORD_PTR& answer) {
+    HWND engine = FindWindowW(kEngineClass, nullptr);
+    answer = 0;
+    return engine && SendMessageTimeoutW(engine, kAutostartMsg, request, 0, SMTO_ABORTIFHUNG,
+                                         1000, &answer) != 0;
+}
+
+// The task as it is now: 1, 0, or -1 when nobody can tell.
+int ReadAutostart() {
+    DWORD_PTR r;
+    if (AskEngine(kAutostartQuery, r) && (r & kAutoElevated) && (r & kAutoKnown))
+        return (r & kAutoPresent) ? 1 : 0;
+    return AutostartState();
+}
+
+void ShowAutostart(bool on) {
+    SendMessageW(g.autostart, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+
+void FinishAutostart(HWND hwnd, bool ok, int state) {
+    KillTimer(hwnd, kTimerAutostart);
+    if (g.autoHelper) { CloseHandle(g.autoHelper); g.autoHelper = nullptr; }
+    g.autoWait = false;
+    EnableWindow(g.autostart, TRUE);
+    ShowAutostart(state >= 0 ? state == 1 : !g.autoWant);   // what is real, not what was clicked
+    SetStatus(ok ? S(g.autoWant ? sAutostartOn : sAutostartOff) : S(sAutostartFail));
+}
+
+void PollAutostart(HWND hwnd) {
+    const int state = ReadAutostart();
+    if (state == (g.autoWant ? 1 : 0)) { FinishAutostart(hwnd, true, state); return; }
+    if (g.autoHelper) {
+        // Waiting on the UAC prompt can take as long as the person likes.
+        if (WaitForSingleObject(g.autoHelper, 0) == WAIT_OBJECT_0) FinishAutostart(hwnd, false, state);
+    } else if (++g.autoTries > 40) {   // ten seconds
+        FinishAutostart(hwnd, false, state);
+    }
+}
+
+void OnAutostart(HWND hwnd) {
+    if (g.autoWait) return;
+    g.autoWant = SendMessageW(g.autostart, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    g.autoTries = 0;
+
+    DWORD_PTR r;
+    const bool sent = AskEngine(kAutostartQuery, r) && (r & kAutoElevated) &&
+                      AskEngine(g.autoWant ? kAutostartEnable : kAutostartDisable, r);
+    if (!sent) {
+        wchar_t exe[MAX_PATH];
+        if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+        SHELLEXECUTEINFOW sei{};
+        sei.cbSize       = sizeof(sei);
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
+        sei.hwnd         = hwnd;
+        sei.lpVerb       = L"runas";
+        sei.lpFile       = exe;
+        sei.lpParameters = g.autoWant ? L"--autostart=on" : L"--autostart=off";
+        sei.nShow        = SW_HIDE;
+        if (!ShellExecuteExW(&sei)) {   // the prompt was refused, or nothing could start
+            ShowAutostart(ReadAutostart() == 1);
+            SetStatus(S(sAutostartDenied));
+            return;
+        }
+        g.autoHelper = sei.hProcess;
+    }
+    g.autoWait = true;
+    EnableWindow(g.autostart, FALSE);
+    SetStatus(S(sAutostartWait));
+    SetTimer(hwnd, kTimerAutostart, 250, nullptr);
 }
 
 // ---------------------------------------------------------------- learned buttons
@@ -634,6 +734,8 @@ void CreateControls(HWND hwnd) {
         SetWindowSubclass(u.keys, KeysProc, kSubclassKeys, 0);
         ShowSeat(i);
     }
+    g.autostart = Make(p, L"BUTTON", S(sAutostart), WS_TABSTOP | BS_AUTOCHECKBOX, kIdAutostart);
+    ShowAutostart(ReadAutostart() == 1);
     g.hint   = Make(hwnd, L"STATIC", S(sHint), SS_LEFT, 0);
     g.status = Make(hwnd, L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, 0);
     g.undo   = Make(hwnd, L"BUTTON", S(sUndo), WS_TABSTOP | BS_PUSHBUTTON, kIdUndo);
@@ -742,7 +844,17 @@ SIZE Layout(HWND hwnd) {
     // The panel is laid out unscrolled, then scrolled back to the top.
     g.scrollY = 0;
     const int colW = Px(kColW);
-    int bottom = 0, rowTop = Px(kMargin), rowEnd = 0;
+
+    // General settings first, across the full width. Later ones go under the
+    // checkbox; the seats below follow whatever height this section takes.
+    const int genW = Columns() * colW + (Columns() - 1) * Px(kGap);
+    int gy = Px(kMargin);
+    g.general = { Px(kMargin), gy, Px(kMargin) + genW, gy + Px(24) };
+    gy += Px(34);
+    place(g.autostart, Px(kMargin), gy, genW, Px(22));
+    gy += Px(22);
+
+    int bottom = gy, rowTop = gy + Px(30), rowEnd = 0;
     for (int i = 0; i < g.seats; ++i) {
         if (i > 0 && i % kPerRow == 0) { rowTop = rowEnd + Px(28); rowEnd = 0; }
         const int x = Px(kMargin) + (i % kPerRow) * (colW + Px(kGap));
@@ -806,6 +918,14 @@ void PaintPanel(HWND hwnd) {
     SetBkMode(dc, TRANSPARENT);
     SetViewportOrgEx(dc, 0, -g.scrollY, nullptr);
     HGDIOBJ old = SelectObject(dc, g.bold);
+    {
+        const RECT& h = g.general;
+        RECT tr = h;
+        SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+        DrawTextW(dc, S(sGeneral), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        RECT line{ h.left, h.bottom + Px(4), h.right, h.bottom + Px(5) };
+        FillRect(dc, &line, GetSysColorBrush(COLOR_3DLIGHT));
+    }
     for (int i = 0; i < g.seats; ++i) {
         const RECT& h = g.ui[i].header;
         const int sw = Px(16), top = h.top + (h.bottom - h.top - sw) / 2;
@@ -871,6 +991,7 @@ void OnSlider(HWND hwnd, HWND slider) {
 
 void OnCommand(HWND hwnd, int id) {
     if (id == kIdClose || id == IDCANCEL) { SendMessageW(hwnd, WM_CLOSE, 0, 0); return; }
+    if (id == kIdAutostart) { OnAutostart(hwnd); return; }
     if (id == kIdUndo) {
         for (int i = 0; i < g.seats; ++i) {
             g.cur.sensitivity[i] = g.opened.sensitivity[i];
@@ -929,6 +1050,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         OnLearned(hwnd, (int)wp, lp);
         return 0;
     case WM_TIMER:
+        if (wp == kTimerAutostart) { PollAutostart(hwnd); return 0; }
         if (wp == kTimerLearn) {            // the engine never answered
             const int seat = g.learning;
             EndLearning(hwnd);
@@ -957,6 +1079,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE:
         if (g.pending) Apply();
+        if (g.autoHelper) { CloseHandle(g.autoHelper); g.autoHelper = nullptr; }
         if (g.learning >= 0) {              // stop the engine listening to a mouse nobody watches
             if (HWND engine = FindWindowW(kEngineClass, nullptr)) PostMessageW(engine, kLearnMsg, 0, 0);
             g.learning = -1;
