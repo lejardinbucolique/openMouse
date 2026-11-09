@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <shlobj.h>
+#include <algorithm>
 
 namespace om {
 namespace {
@@ -86,6 +87,54 @@ std::wstring Config::DefaultPath() {
     return L"openmouse.ini";
 }
 
+namespace {
+
+// Colours handed to seats created at run time, picked for how well they tell
+// apart from each other on a white or dark background.
+const COLORREF kPalette[] = {
+    RGB(0x4A, 0x90, 0xD9),   // blue
+    RGB(0x5C, 0xB8, 0x5C),   // green
+    RGB(0xB0, 0x60, 0xC0),   // purple
+    RGB(0xE0, 0x3C, 0x3C),   // red
+    RGB(0x20, 0xC0, 0xD0),   // cyan
+    RGB(0xF0, 0x6E, 0xAA),   // pink
+    RGB(0xF5, 0xD0, 0x00),   // yellow
+    RGB(0xE8, 0x6A, 0x33),   // orange
+    RGB(0xB8, 0xD8, 0x2A),   // lime
+    RGB(0x8B, 0x5A, 0x2B),   // brown
+};
+
+long ColorDistance2(COLORREF a, COLORREF b) {
+    const long dr = (long)GetRValue(a) - GetRValue(b);
+    const long dg = (long)GetGValue(a) - GetGValue(b);
+    const long db = (long)GetBValue(a) - GetBValue(b);
+    return dr * dr + dg * dg + db * db;
+}
+
+} // namespace
+
+COLORREF Config::PickSeatColor(int seat) const {
+    COLORREF best = kPalette[0];
+    long bestDist = -1;
+    for (const COLORREF c : kPalette) {
+        long nearest = 0x7FFFFFFF;
+        for (int i = 0; i < seatCount && i < (int)seatColors.size(); ++i)
+            if (i != seat) nearest = std::min(nearest, ColorDistance2(c, seatColors[i]));
+        if (nearest > bestDist) { bestDist = nearest; best = c; }
+    }
+    return best;
+}
+
+void Config::EnsureSeatSlots(int n) {
+    if (n > kMaxSeats) n = kMaxSeats;
+    if ((int)sensitivity.size() < n) sensitivity.resize(n, 1.0);
+    if ((int)accel.size()       < n) accel.resize(n);
+    while ((int)seatColors.size() < n) {
+        seatColors.push_back(RGB(200, 200, 200));
+        seatColors.back() = PickSeatColor((int)seatColors.size() - 1);
+    }
+}
+
 bool Config::Load(const std::wstring& path) {
     const std::wstring text = ReadFileUtf16(path);
     if (text.empty()) return false;
@@ -136,6 +185,7 @@ bool Config::Load(const std::wstring& path) {
     }
     if (seatCount < 1) seatCount = 1;
     if (seatCount > kMaxSeats) seatCount = kMaxSeats;
+    EnsureSeatSlots(seatCount);
     return true;
 }
 

@@ -96,6 +96,29 @@ std::wstring StableKey(const std::wstring& path) {
     return key;
 }
 
+std::wstring HardwareKey(const std::wstring& path) {
+    const std::wstring cls = PathComponent(path, 0), hw = PathComponent(path, 1);
+    if (cls.empty() || hw.empty()) return L"";
+    return Lower(cls + L"#" + hw);
+}
+
+std::wstring HardwareBase(const std::wstring& path) {
+    std::wstring key = HardwareKey(path);
+    for (const wchar_t* tag : { L"&mi_", L"&col" }) {
+        const size_t at = key.find(tag);
+        if (at != std::wstring::npos) key.resize(at);
+    }
+    return key;
+}
+
+bool IsAutoSeatCandidate(const std::wstring& path) {
+    const std::wstring p = Lower(path);
+    if (p.find(L"acpi#") != std::wstring::npos || p.find(L"acpi\\") != std::wstring::npos)
+        return false;                                  // integrated touchpad, PS/2
+    return p.find(L"vid_") != std::wstring::npos ||    // USB
+           p.find(L"vid&") != std::wstring::npos;      // Bluetooth
+}
+
 std::vector<DeviceInfo> EnumerateDevices() {
     std::vector<DeviceInfo> result;
 

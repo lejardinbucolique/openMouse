@@ -51,6 +51,13 @@ std::set<HANDLE>          g_deadMice;
 std::set<HANDLE>          g_deadKeyboards;
 int                       g_activeSeat = 0;  // owns the real system cursor
 HWND                      g_hwnd = nullptr;
+HINSTANCE                 g_inst = nullptr;  // for the overlays created at run time
+
+// Seats are created while the engine runs, one per newly seen mouse. Ready:
+// state and overlay exist. Present: a bound mouse is plugged in right now.
+// A seat whose mouse is unplugged keeps its arrow where it was.
+bool                      g_seatReady[kMaxSeats]   = {};
+bool                      g_seatPresent[kMaxSeats] = {};
 bool                      g_captureActive = false;
 
 std::atomic<uint64_t>     g_heartbeat{0};
@@ -1175,11 +1182,143 @@ void WatchdogThread() {
 
 // ---------------------------------------------------------------- binding
 
-// Auto-binding is a runtime fallback only; it is deliberately never written
-// back to the config. This machine exposes four HID mouse interfaces for two
-// physical mice, and enumeration order does not match physical order — so
-// persisting a guess would quietly overwrite whatever --identify established
-// and there would be no way to tell a measured binding from a guessed one.
+// A seat's pointer: its state, its overlay and the place it starts from.
+void InitSeat(int i, POINT at) {
+    g_seats[i]       = Seat{};
+    g_seats[i].index = i;
+    g_seats[i].pos   = at;
+    ClampToVirtualScreen(g_seats[i].pos);
+    const COLORREF c = (i < (int)g_cfg.seatColors.size())
+                     ? g_cfg.seatColors[i] : RGB(200, 200, 200);
+    // Every seat gets an overlay, including seat 0. Seat 0 starts out
+    // owning the hardware cursor so its overlay starts hidden, but it
+    // needs to exist: the moment another seat clicks, seat 0 loses the
+    // cursor and SetActiveSeat asks for that overlay. Creating it only for
+    // i != 0 made seat 0's pointer vanish permanently on the first
+    // handover.
+    g_overlayOk[i] = g_overlay[i].Create(g_inst, i, c);
+    g_overlay[i].MoveTo(g_seats[i].pos);
+    g_seatReady[i] = true;
+    LogLine(L"[seat %d] colour %02X%02X%02X  overlay %s", i,
+            GetRValue(c), GetGValue(c), GetBValue(c),
+            g_overlayOk[i] ? L"created" : L"FAILED TO CREATE");
+}
+
+// Seats a rescan has added to the configuration get their pointer here, beside
+// the one that owns the cursor so the new arrow is easy to find.
+void CreateNewSeats() {
+    for (int i = 0; i < g_cfg.seatCount; ++i) {
+        if (g_seatReady[i]) continue;
+        POINT at = g_seats[g_activeSeat].pos;
+        at.x += 40; at.y += 24;
+        InitSeat(i, at);
+    }
+}
+
+// A seat's arrow shows once its mouse is plugged in, and then stays: unplugging
+// leaves it where it stopped (no flicker, nothing to jump back from).
+void ShowPresentSeats() {
+    for (int i = 0; i < g_cfg.seatCount; ++i) {
+        if (!g_seatReady[i] || !g_seatPresent[i] || g_overlay[i].IsVisible()) continue;
+        // The owner draws through the real cursor unless that one is hidden.
+        if (i == g_activeSeat && (!g_cursorHidden || g_overShell)) continue;
+        g_overlay[i].MoveTo(g_seats[i].pos);
+        g_overlay[i].Show(true);
+    }
+}
+
+// A mouse openMouse has never seen: a seat of its own, taking the speed of
+// seat 0 until it is tuned. A seat past the end of the table is a new one.
+void AddSeatConfig(int seat) {
+    g_cfg.seatCount = seat + 1;
+    g_cfg.EnsureSeatSlots(g_cfg.seatCount);
+    g_cfg.seatColors[seat]  = g_cfg.PickSeatColor(seat);
+    g_cfg.sensitivity[seat] = g_cfg.sensitivity[0];
+    g_cfg.accel[seat]       = g_cfg.accel[0];
+}
+
+// Binds the mouse interfaces the ini does not know to a seat, and writes the
+// assignment back so the mouse finds the same seat and colour next time.
+// Everything that is not a mouse of its own stays dead:
+//   - integrated devices (ACPI touchpads, PS/2) and anything without a
+//     manufacturer id;
+//   - another collection of hardware that is already bound (same product,
+//     different MI_/Col suffix): a ghost of a mouse that has its seat;
+//   - of a new product, every collection but one.
+// A second mouse of a bound model is told from a ghost by having the SAME
+// suffix as the bound one: a second Col01 is a second mouse.
+void SeatNewMice(const std::vector<DeviceInfo>& devices,
+                 std::map<std::wstring, const wchar_t*>& deadWhy) {
+    std::set<std::wstring> boundKeys, boundBases;
+    std::set<int> usedSeats;
+    for (const auto& kv : g_cfg.mouseBinding) {
+        boundKeys.insert(HardwareKey(kv.first));
+        boundBases.insert(HardwareBase(kv.first));
+        usedSeats.insert(kv.second);
+    }
+
+    struct Fresh { const DeviceInfo* d; std::wstring key, base; };
+    std::vector<Fresh> fresh;
+    for (const auto& d : devices) {
+        if (d.type != RIM_TYPEMOUSE || g_cfg.mouseBinding.count(d.path)) continue;
+        if (!IsAutoSeatCandidate(d.path)) {
+            deadWhy[d.path] = L"integrated device or no manufacturer id";
+            continue;
+        }
+        Fresh f{ &d, HardwareKey(d.path), HardwareBase(d.path) };
+        if (boundBases.count(f.base) && !boundKeys.count(f.key)) {
+            deadWhy[d.path] = L"other collection of a bound mouse";
+            continue;
+        }
+        fresh.push_back(std::move(f));
+    }
+
+    // One collection per new product: the one most interfaces share, the
+    // lowest suffix on a tie (Col01 before Col02).
+    std::map<std::wstring, std::map<std::wstring, int>> familyKeys;
+    for (const auto& f : fresh)
+        if (!boundBases.count(f.base)) familyKeys[f.base][f.key]++;
+    std::map<std::wstring, std::wstring> primary;
+    for (const auto& fam : familyKeys) {
+        int best = 0;
+        for (const auto& k : fam.second)
+            if (k.second > best) { best = k.second; primary[fam.first] = k.first; }
+    }
+
+    bool added = false;
+    for (const auto& f : fresh) {
+        if (!boundBases.count(f.base) && f.key != primary[f.base]) {
+            deadWhy[f.d->path] = L"other collection of a new mouse";
+            continue;
+        }
+        // The first seat no mouse holds in the ini; past the end of the table it is a new seat.
+        int seat = -1;
+        for (int s = 0; s < kMaxSeats; ++s)
+            if (!usedSeats.count(s)) { seat = s; break; }
+        if (seat < 0) {
+            deadWhy[f.d->path] = L"all seats are taken";
+            LogLine(L"[warn] mouse %s : no seat left (%d seats)",
+                    f.d->friendlyName.c_str(), kMaxSeats);
+            continue;
+        }
+        if (seat >= g_cfg.seatCount) AddSeatConfig(seat);
+        usedSeats.insert(seat);
+        g_cfg.mouseBinding[f.d->path] = seat;
+        added = true;
+        const COLORREF c = g_cfg.seatColors[seat];
+        LogLine(L"[new] mouse    seat %d  %s  colour %02X%02X%02X  (%d seats)", seat,
+                f.d->friendlyName.c_str(), GetRValue(c), GetGValue(c), GetBValue(c),
+                g_cfg.seatCount);
+    }
+    if (added && !g_cfg.Save(Config::DefaultPath()))
+        LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
+}
+
+// Without any measured binding the assignment is a runtime guess, never
+// written back: this machine exposed four HID mouse interfaces for two
+// physical mice, and persisting a guess would be indistinguishable from what
+// --identify measured. Once the ini holds measured mice, a mouse it does not
+// know is given a seat (SeatNewMice) and that seat IS written back.
 void ApplyBindings() {
     g_mouseSeat.clear();
     g_keyboardSeat.clear();
@@ -1218,6 +1357,9 @@ void ApplyBindings() {
     if (!moved.empty() && !g_cfg.Save(Config::DefaultPath()))
         LogLine(L"[error] could not write %s", Config::DefaultPath().c_str());
 
+    std::map<std::wstring, const wchar_t*> deadWhy;
+    if (haveMouseCfg) SeatNewMice(devices, deadWhy);
+
     for (const auto& d : devices) {
         if (d.type == RIM_TYPEMOUSE) {
             auto it = g_cfg.mouseBinding.find(d.path);
@@ -1226,11 +1368,12 @@ void ApplyBindings() {
                 LogLine(L"[bind] mouse    seat %d  %s", it->second, d.friendlyName.c_str());
             } else if (haveMouseCfg) {
                 // Measured bindings exist, so an unmatched interface is a
-                // ghost collection of already-bound hardware. Kill it rather
-                // than let it double-drive seat 0.
+                // ghost collection, an integrated device or a mouse past the
+                // last seat. Kill it rather than let it double-drive seat 0.
                 g_deadMice.insert(d.handle);
-                LogLine(L"[dead] mouse    %s  (unidentified interface, dropped)",
-                        d.friendlyName.c_str());
+                const auto why = deadWhy.find(d.path);
+                LogLine(L"[dead] mouse    %s  (%s, dropped)", d.friendlyName.c_str(),
+                        why != deadWhy.end() ? why->second : L"unidentified interface");
             } else {
                 // No measured config at all: auto-bind so first run works.
                 const int seat = (autoMouse < g_cfg.seatCount) ? autoMouse : 0;
@@ -1259,6 +1402,10 @@ void ApplyBindings() {
     }
     if (!haveMouseCfg)
         LogLine(L"[warn] no measured bindings — run openmouse.exe --identify");
+
+    for (bool& p : g_seatPresent) p = false;
+    for (const auto& kv : g_mouseSeat)
+        if (kv.second >= 0 && kv.second < kMaxSeats) g_seatPresent[kv.second] = true;
 }
 
 // ---------------------------------------------------------------- window
@@ -1353,6 +1500,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == 3) {                      // coalesced device-change rescan
             KillTimer(hwnd, 3);
             ApplyBindings();
+            CreateNewSeats();      // a mouse seen for the first time: its pointer
+            ShowPresentSeats();    // a mouse back after an absence: its arrow
             return 0;
         }
         if (wp == 2) {                      // auto-exit timer
@@ -1384,6 +1533,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         L" (hit=%.0f class=%.0f)",
                         g_perf.mRead * us, g_perf.mPin * us, g_perf.mOverlay * us,
                         g_perf.mShell * us, g_perf.mHit * us, g_perf.mClass * us);
+                // Cost of one more arrow: the overlay step is per flush, and a
+                // flush moves every seat that has moved, so read it with the count.
+                int arrows = 0;
+                for (int i = 0; i < g_cfg.seatCount; ++i) arrows += g_overlay[i].IsVisible() ? 1 : 0;
+                LogLine(L"[perf] %d arrows shown (%d seats)  overlay per flush=%.1f us",
+                        arrows, g_cfg.seatCount, g_perf.tOverlay * us / f);
                 g_perf = PerfStats{};
                 for (int i = 0; i < g_cfg.seatCount; ++i) {
                     AccelState& a = g_accel[i];
@@ -2347,6 +2502,7 @@ int RunMain(HINSTANCE inst) {
     // anything else — this build normally holds no clip at all.
     ClipCursor(nullptr);
 
+    g_inst = inst;
     g_cfg.Load(Config::DefaultPath());
 
     WNDCLASSEXW wc{};
@@ -2373,24 +2529,8 @@ int RunMain(HINSTANCE inst) {
     // stacked on top of each other at startup.
     POINT start{};
     GetCursorPos(&start);
-    for (int i = 0; i < g_cfg.seatCount; ++i) {
-        g_seats[i].index = i;
-        g_seats[i].pos   = { start.x + i * 40, start.y + i * 24 };
-        ClampToVirtualScreen(g_seats[i].pos);
-        const COLORREF c = (i < (int)g_cfg.seatColors.size())
-                         ? g_cfg.seatColors[i] : RGB(200, 200, 200);
-        // Every seat gets an overlay, including seat 0. Seat 0 starts out
-        // owning the hardware cursor so its overlay starts hidden, but it
-        // needs to exist: the moment another seat clicks, seat 0 loses the
-        // cursor and SetActiveSeat asks for that overlay. Creating it only for
-        // i != 0 made seat 0's pointer vanish permanently on the first
-        // handover.
-        g_overlayOk[i] = g_overlay[i].Create(inst, i, c);
-        g_overlay[i].MoveTo(g_seats[i].pos);
-        LogLine(L"[seat %d] colour %02X%02X%02X  overlay %s", i,
-                GetRValue(c), GetGValue(c), GetBValue(c),
-                g_overlayOk[i] ? L"created" : L"FAILED TO CREATE");
-    }
+    for (int i = 0; i < g_cfg.seatCount; ++i)
+        InitSeat(i, { start.x + i * 40, start.y + i * 24 });
     g_activeSeat = 0;
 
     // Decide this before showing the overlays: if the hardware cursor can be
@@ -2399,8 +2539,9 @@ int RunMain(HINSTANCE inst) {
     const bool hidden = HideSystemCursor();
     if (!hidden)
         LogLine(L"[cursor] could not hide — falling back to snap-back correction (expect jitter)");
+    // A seat whose mouse is not plugged in has no arrow until it is.
     for (int i = 0; i < g_cfg.seatCount; ++i)
-        g_overlay[i].Show(hidden || i != 0);
+        g_overlay[i].Show((hidden || i != 0) && (i == 0 || g_seatPresent[i]));
 
     if (!RegisterCapture(g_hwnd, g_cfg.captureKeyboards)) return 1;
 

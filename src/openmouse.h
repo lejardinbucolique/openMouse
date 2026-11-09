@@ -52,6 +52,20 @@ std::wstring            FriendlyNameFromPath(const std::wstring& path);
 // VID/PID (ACPI touchpads, PS/2), which then only ever match exactly.
 std::wstring StableKey(const std::wstring& path);
 
+// Hardware identity of an interface, lower case: "class#hardware id", with the
+// MI_/Col collection suffixes kept ("hid#vid_046d&pid_c534&mi_01&col01").
+// Unlike StableKey it also exists for paths without "vid_" (Bluetooth).
+std::wstring HardwareKey(const std::wstring& path);
+
+// The same without the collection suffixes ("hid#vid_046d&pid_c534"): what
+// all the interfaces of one product have in common, ghost collections included.
+std::wstring HardwareBase(const std::wstring& path);
+
+// Whether an unknown mouse may be given a seat on its own: false for the
+// integrated devices (ACPI touchpads, PS/2) and for any interface that carries
+// no manufacturer id (I2C touchpads), which only an ini entry can seat.
+bool IsAutoSeatCandidate(const std::wstring& path);
+
 // ---------------------------------------------------------------- seats
 
 struct Seat {
@@ -121,6 +135,14 @@ struct Config {
     bool markActiveSeat = true;
 
     int  seatCount = 2;
+
+    // Grows the per-seat tables to hold n seats. A slot that did not exist
+    // gets a colour that stands out from the seats already there.
+    void EnsureSeatSlots(int n);
+
+    // Colour for a seat created at run time: the palette entry farthest from
+    // every other seat's colour.
+    COLORREF PickSeatColor(int seat) const;
 
     bool Load(const std::wstring& path);
     bool Save(const std::wstring& path) const;

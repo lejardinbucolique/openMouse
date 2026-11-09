@@ -199,8 +199,8 @@ sensitivity=1.00
 ```
 
 Any other `color` value tints the arrow body and keeps the dark outline. `sensitivity`
-is a per-seat pointer speed multiplier. Up to eight seats are supported by the code;
-only two have been tested.
+is a per-seat pointer speed multiplier. Up to eight seats are supported; a
+new mouse adds one by itself.
 
 Optional pointer acceleration, per seat. As soon as any of these keys is present in a
 `[seatN]` section, it replaces `sensitivity` for that seat; without them the fixed
@@ -218,10 +218,21 @@ A USB mouse rarely exceeds 2 to 4 counts per ms, hence the low default threshold
 touchpad reports a different step scale; tune each seat separately (`--perf` logs
 each seat's speed and gain every two seconds of motion).
 
-Once measured bindings exist, unmatched interfaces are dropped as ghost collections of
-already-bound hardware. On a first run with no bindings at all, devices are auto-assigned
-round-robin so nothing is dead out of the box, but run `--identify` before trusting the
-assignment.
+Once measured bindings exist, a mouse the ini has never listed is seated by itself, with
+no setting and no command: it takes the first seat that has no mouse in the ini, or a new
+seat (up to eight), with its own arrow, a colour that stands out from the other seats and
+the speed settings of seat 0. The assignment is written to the ini, so the mouse finds the
+same seat and colour the next time, on any USB port. The arrows follow the mice: plug one
+in and its arrow appears; unplug it and the arrow stays where it stopped.
+
+Never seated on their own, and dropped as before: integrated devices (ACPI touchpads,
+PS/2) and interfaces with no manufacturer id, other collections (`MI_`/`Col` suffix) of a
+mouse that already has a seat, and every collection but one of a new product. List such a
+device in `[mouse]` by hand to seat it anyway. On a first run with no bindings at all,
+devices are auto-assigned round-robin so nothing is dead out of the box, but run
+`--identify` before trusting the assignment.
+
+Each arrow that moves costs about 0.2 to 0.3 ms per flush (measured, 1 to 8 overlays).
 
 ## Command reference
 
@@ -353,7 +364,9 @@ same mitigation.
 - No IME support. Non-Latin input under keyboard steering is untested and likely broken.
 - Absolute-positioning devices such as tablets and touchscreens are handled in code but
   untested.
-- Seat counts above two are supported in code but untested.
+- Seat counts above two are supported in code but only lightly tested on real hardware.
+- A new mouse that exposes several mouse collections can only be told from a ghost by its
+  suffix; if the wrong one is seated, list the right interface in `[mouse]`.
 - The tray icon uses the generic application icon. The settings window covers speed and
   acceleration only; bindings and colours are still edited in the file.
 
