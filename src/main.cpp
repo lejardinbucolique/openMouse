@@ -1265,6 +1265,28 @@ void ApplyBindings() {
 
 void TrayMenu(HWND hwnd);   // defined with the other tray plumbing below
 
+// The settings window has written new seat values: take the speed ones at
+// once. Only sensitivity and acceleration are live; the rest of the file
+// (bindings, colours, seat count) still needs a restart.
+void ReloadSettings() {
+    Config fresh;
+    if (!fresh.Load(Config::DefaultPath())) {
+        LogLine(L"[settings] reload asked, but the configuration could not be read");
+        return;
+    }
+    g_cfg.sensitivity = fresh.sensitivity;
+    g_cfg.accel       = fresh.accel;
+    for (auto& a : g_accel) a = AccelState{};
+    for (int i = 0; i < g_cfg.seatCount; ++i) {
+        const double k = i < (int)g_cfg.sensitivity.size() ? g_cfg.sensitivity[i] : 1.0;
+        if (i < (int)g_cfg.accel.size() && g_cfg.accel[i].on)
+            LogLine(L"[settings] seat %d accel slow=%.2f fast=%.2f speed=%.2f", i,
+                    g_cfg.accel[i].slow, g_cfg.accel[i].fast, g_cfg.accel[i].speed);
+        else
+            LogLine(L"[settings] seat %d sensitivity %.2f", i, k);
+    }
+}
+
 // Peak of each step within one event, and a per-step breakdown of any event
 // over 20 ms, so a hitch names the step that took the time.
 void NoteEventSteps(const PerfStats& before, int64_t dt, DWORD lag, const wchar_t* src) {
@@ -1313,6 +1335,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (lag > g_perf.lagMax) g_perf.lagMax = lag;
         return 0;
     }
+
+    case kReloadSettingsMsg:
+        ReloadSettings();
+        return 0;
 
     case WM_INPUT_DEVICE_CHANGE:
         // One of these arrives per device the moment we register, so a machine
@@ -2216,6 +2242,7 @@ constexpr UINT kTrayCmdStop     = 100;
 constexpr UINT kTrayCmdIdentify = 101;
 constexpr UINT kTrayCmdLog      = 102;
 constexpr UINT kTrayCmdAbout    = 103;
+constexpr UINT kTrayCmdSettings = 104;
 
 // Relaunch ourselves in another mode. Used by the tray menu.
 void RelaunchSelf(const wchar_t* args) {
@@ -2240,7 +2267,9 @@ void TrayAdd(HWND hwnd) {
     nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = kTrayCallbackMsg;
     nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(nid.szTip, L"openMouse — right-click to stop (panic: Ctrl+Alt+Shift+Q)");
+    wcscpy_s(nid.szTip, UiFrench()
+        ? L"openMouse : clic pour les réglages ou l'arrêt (urgence : Ctrl+Alt+Maj+Q)"
+        : L"openMouse — click for settings or to stop (panic: Ctrl+Alt+Shift+Q)");
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
 
@@ -2253,17 +2282,23 @@ void TrayRemove(HWND hwnd) {
 }
 
 void TrayMenu(HWND hwnd) {
+    const bool fr = UiFrench();
     wchar_t header[64];
-    swprintf(header, 64, L"openMouse — %d seats%s", g_cfg.seatCount,
-             g_cfg.captureKeyboards ? L", keyboards steered" : L"");
+    if (fr) swprintf(header, 64, L"openMouse : %d souris%s", g_cfg.seatCount,
+                     g_cfg.captureKeyboards ? L", claviers dirigés" : L"");
+    else    swprintf(header, 64, L"openMouse — %d seats%s", g_cfg.seatCount,
+                     g_cfg.captureKeyboards ? L", keyboards steered" : L"");
 
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING | MF_DISABLED, kTrayCmdAbout, header);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kTrayCmdIdentify, L"Re-identify devices…");
-    AppendMenuW(menu, MF_STRING, kTrayCmdLog,      L"Open log folder");
+    AppendMenuW(menu, MF_STRING, kTrayCmdSettings, fr ? L"Réglages…" : L"Settings…");
+    AppendMenuW(menu, MF_STRING, kTrayCmdIdentify, fr ? L"Réidentifier les souris…" : L"Re-identify devices…");
+    AppendMenuW(menu, MF_STRING, kTrayCmdLog,      fr ? L"Ouvrir le dossier du journal" : L"Open log folder");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kTrayCmdStop,     L"Stop openMouse\tCtrl+Alt+Shift+Q");
+    AppendMenuW(menu, MF_STRING, kTrayCmdStop,     fr ? L"Arrêter openMouse\tCtrl+Alt+Maj+Q"
+                                                      : L"Stop openMouse\tCtrl+Alt+Shift+Q");
+    SetMenuDefaultItem(menu, kTrayCmdSettings, FALSE);
 
     POINT pt{};
     GetCursorPos(&pt);
@@ -2275,6 +2310,13 @@ void TrayMenu(HWND hwnd) {
     DestroyMenu(menu);
 
     switch (cmd) {
+    case kTrayCmdSettings:
+        // A process of its own, so the window never shares this thread with
+        // the input path. Let it come to the front: we hold the foreground.
+        LogLine(L"[tray] settings requested");
+        AllowSetForegroundWindow(ASFW_ANY);
+        RelaunchSelf(L"--settings");
+        break;
     case kTrayCmdStop:
         LogLine(L"[tray] stop requested");
         RequestExit();
@@ -2320,6 +2362,10 @@ int RunMain(HINSTANCE inst) {
     g_hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"openMouse",
                              WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, inst, nullptr);
     if (!g_hwnd) { LogLine(L"[fatal] could not create engine window"); return 1; }
+    // The settings window may run without elevation while the engine is
+    // elevated; let its reload request through the privilege filter. All it
+    // does is make us re-read a file that window could write anyway.
+    ChangeWindowMessageFilterEx(g_hwnd, kReloadSettingsMsg, MSGFLT_ALLOW, nullptr);
 
     ApplyBindings();
 
@@ -2441,7 +2487,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         std::wstring a = argv[i];
         if (a == L"--list" || a == L"--probe" || a == L"--probe-echo" ||
             a == L"--identify" || a == L"--watch" || a == L"--restore-cursor" ||
-            a == L"--receiver" || a == L"--monitor" || a == L"--help") mode = a;
+            a == L"--receiver" || a == L"--monitor" || a == L"--settings" ||
+            a == L"--help") mode = a;
         else if (a == L"--verbose")
             om::g_verbose = true;
         else if (a == L"--perf")
@@ -2456,6 +2503,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     LocalFree(argv);
 
     om::OpenLogFile();
+
+    // A window, not a console tool: no console to attach to or allocate.
+    if (mode == L"--settings") return om::RunSettings(inst);
 
     if (mode == L"--identify" || mode == L"--watch") {
         // Needs its own visible window: it is a dialogue with the person at
@@ -2486,6 +2536,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"openMouse — multi-pointer input for Windows");
         om::LogLine(L"");
         om::LogLine(L"  openmouse.exe               run the engine");
+        om::LogLine(L"  openmouse.exe --settings    window to set each seat's speed and acceleration");
         om::LogLine(L"  openmouse.exe --list        list input devices and their paths");
         om::LogLine(L"  openmouse.exe --identify    bind each seat by moving its mouse");
         om::LogLine(L"  openmouse.exe --probe       check SendInput works under NOLEGACY");
@@ -2501,7 +2552,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"              --perf          input latency figures every 2 s");
         om::LogLine(L"");
         om::LogLine(L"  Panic key while running: Ctrl+Alt+Shift+Q");
-        om::LogLine(L"  Tray icon: right-click to stop, re-identify, or open the log folder");
+        om::LogLine(L"  Tray icon: click for settings, to stop, re-identify, or open the log folder");
         // %% — this string goes through a printf-style formatter, where a bare
         // %A is a hex-float specifier and eats the path.
         om::LogLine(L"  Log file: %%APPDATA%%\\openMouse\\openmouse.log");

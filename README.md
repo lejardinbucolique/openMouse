@@ -52,8 +52,10 @@ until you run `--probe` and `--probe-echo` there.
 - Dragging is protected. While one seat holds a button, the other seats' buttons are
   held off so the drag cannot be broken or hijacked; their pointers keep moving freely.
 - Mouse back/forward side buttons work per seat.
-- Runs from the system tray. Right-click to stop, re-identify devices, or open the log
-  folder.
+- Runs from the system tray. Click the icon to open the settings window, stop,
+  re-identify devices, or open the log folder.
+- A settings window sets each seat's speed and acceleration with sliders, applied at once
+  while the engine runs, without editing any file.
 - Device bindings are stored by device interface path, so they survive reboots and
   replugging.
 
@@ -162,6 +164,14 @@ injects keystrokes, so it cannot break typing; see
 [What it cannot do](#what-it-cannot-do) for what it does and does not achieve.
 
 ## Configuration
+
+The tray menu's **Settings…** entry (or `openmouse.exe --settings`) opens a window with,
+for each seat, the sensitivity and the acceleration sliders described below. A change is
+written to the configuration file and taken by the running engine at once; **Undo my
+changes** puts back the values the window opened with. The window runs as a process of
+its own, so it never shares a thread with the input path. It speaks French when Windows
+does, English otherwise. Device bindings, colours and the seat count are still set in the
+file for now.
 
 `%APPDATA%\openMouse\openmouse.ini`
 
@@ -293,6 +303,7 @@ is drawn as a layered, click-through, topmost window.
 | `src/devices.cpp` | Device enumeration and stable identity via the registry Enum key |
 | `src/overlay.cpp` | Per-seat pointer rendering derived from the real system cursor |
 | `src/config.cpp` | Configuration load and save, logging |
+| `src/settings.cpp` | Settings window (`--settings`): per-seat speed and acceleration |
 
 ## Findings
 
@@ -343,7 +354,8 @@ same mitigation.
 - Absolute-positioning devices such as tablets and touchscreens are handled in code but
   untested.
 - Seat counts above two are supported in code but untested.
-- The tray icon uses the generic application icon. There is no settings interface.
+- The tray icon uses the generic application icon. The settings window covers speed and
+  acceleration only; bindings and colours are still edited in the file.
 
 ## Building
 

@@ -22,6 +22,9 @@ namespace om {
 constexpr int   kMaxSeats        = 8;
 constexpr UINT  kTrayCallbackMsg = WM_APP + 1;
 constexpr UINT  kTrayIconId      = 1;
+// Posted to the engine window by the settings window once it has written new
+// seat values to the configuration file: re-read them and use them at once.
+constexpr UINT  kReloadSettingsMsg = WM_APP + 2;
 
 // ---------------------------------------------------------------- device id
 
@@ -166,6 +169,14 @@ private:
     COLORREF     color_ = 0;
     POINT        at_{ 0, 0 };        // last logical position, to re-place the arrow on a shape swap
 };
+
+// ---------------------------------------------------------------- settings
+
+// The settings window, a process of its own (openmouse.exe --settings).
+int  RunSettings(HINSTANCE inst);
+// True when Windows shows its interface in French; the tray menu and the
+// settings window then speak French, otherwise English.
+bool UiFrench();
 
 // ---------------------------------------------------------------- utilities
 
