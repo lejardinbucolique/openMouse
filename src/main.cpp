@@ -1506,6 +1506,31 @@ void NoteEventSteps(const PerfStats& before, int64_t dt, DWORD lag, const wchar_
             hit * us, cls * us, set * us, other * us, (unsigned long)lag);
 }
 
+// Puts every arrow back above whatever topmost window now covers it. Cheap
+// when nothing does: the z-order walk only costs a SetWindowPos on a hit.
+void ReassertArrows() {
+    for (int i = 0; i < kMaxSeats; ++i) {
+        const int64_t t0 = Qpc();
+        wchar_t who[64] = L"";
+        if (g_overlay[i].ReassertTopmost(who, 64) && g_perfLog) {
+            const double us = g_qpcFreq ? 1e6 / (double)g_qpcFreq : 0;
+            LogLine(L"[perf] topmost seat %d reasserted in %.0f us (under %s)", i, (Qpc() - t0) * us, who);
+        }
+    }
+}
+
+constexpr UINT_PTR kMenuSettleTimer = 4;
+HWND g_menuTimerWnd = nullptr;
+
+// A menu opens above the arrows, and waiting for the once-a-second check left
+// the pointer hidden over it. Reassert the moment any menu pops up (tray
+// icon, desktop, an application's), and once more shortly after: the menu
+// window may not be shown yet when the event fires.
+void CALLBACK MenuPopupEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+    ReassertArrows();
+    if (g_menuTimerWnd) SetTimer(g_menuTimerWnd, kMenuSettleTimer, 80, nullptr);
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case kTrayCallbackMsg:
@@ -1554,6 +1579,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ApplyBindings();
             CreateNewSeats();      // a mouse seen for the first time: its pointer
             ShowPresentSeats();    // a mouse back after an absence: its arrow
+            return 0;
+        }
+        if (wp == kMenuSettleTimer) {       // second pass after a menu popped up
+            KillTimer(hwnd, kMenuSettleTimer);
+            ReassertArrows();
             return 0;
         }
         if (wp == 2) {                      // auto-exit timer
@@ -1639,14 +1669,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
                 // Other topmost windows can come above the arrows. Reassert
                 // here rather than on the move path, and only when covered.
-                for (int i = 0; i < kMaxSeats; ++i) {
-                    const int64_t t0 = Qpc();
-                    wchar_t who[64] = L"";
-                    if (g_overlay[i].ReassertTopmost(who, 64) && g_perfLog) {
-                        const double us = g_qpcFreq ? 1e6 / (double)g_qpcFreq : 0;
-                        LogLine(L"[perf] topmost seat %d reasserted in %.0f us (under %s)", i, (Qpc() - t0) * us, who);
-                    }
-                }
+                ReassertArrows();
             }
         }
         if (wp == 1 && g_verbose) {
@@ -2630,12 +2653,19 @@ int RunMain(HINSTANCE inst) {
 
     std::thread watchdog(WatchdogThread);
 
+    g_menuTimerWnd = g_hwnd;
+    HWINEVENTHOOK menuHook = SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPSTART,
+                                             nullptr, MenuPopupEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+    if (!menuHook) LogLine(L"[menu] SetWinEventHook failed: %lu", GetLastError());
+
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
 
+    if (menuHook) UnhookWinEvent(menuHook);
+    g_menuTimerWnd = nullptr;
     g_running = false;
     watchdog.join();
     StopGateThread();

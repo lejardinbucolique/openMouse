@@ -303,20 +303,18 @@ bool CursorOverlay::ReassertTopmost(wchar_t* who, int whoLen) {
     if (!hwnd_ || !visible_) return false;
     // Walking up the z-order is cheap; SetWindowPos is not. Only pay for it
     // when a visible topmost window of another process sits above the arrow.
-    // Our own windows must not count: the two arrows are both topmost, so
-    // each reassert put the other one underneath and they swapped every
-    // second, 50 to 100 ms each.
-    const DWORD self = GetCurrentProcessId();
+    // The other arrows must not count: they are all topmost, so each reassert
+    // put the other one underneath and they swapped every second, 50 to
+    // 100 ms each. Our other windows do count, though: the tray icon's menu
+    // belongs to this process and must have the arrows drawn over it.
     HWND cover = nullptr;
     for (HWND w = GetWindow(hwnd_, GW_HWNDPREV); w; w = GetWindow(w, GW_HWNDPREV)) {
         if (!IsWindowVisible(w)) continue;
         if (!(GetWindowLongW(w, GWL_EXSTYLE) & WS_EX_TOPMOST)) continue;
-        DWORD pid = 0;
-        GetWindowThreadProcessId(w, &pid);
-        if (pid == self) continue;
-        // The shell's band sits above every topmost window: nothing reasserted under it can show.
         wchar_t cls[64] = {};
         GetClassNameW(w, cls, 63);
+        if (!wcscmp(cls, kOverlayClass)) continue;
+        // The shell's band sits above every topmost window: nothing reasserted under it can show.
         if (IsShellWindowClass(cls)) continue;
         cover = w;
         break;
