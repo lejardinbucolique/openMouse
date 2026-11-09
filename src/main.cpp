@@ -493,23 +493,62 @@ PointerShape ResizeShapeAt(POINT p) {
     }
 }
 
-// Re-asks only when the pointer has moved, and at most every 30 ms per seat;
-// the timer flush (250 ms) catches the position the throttle skipped. While
-// the seat holds a button the shape is left alone, so a resize in progress
-// keeps its arrow however far the pointer runs ahead of the window edge.
+// The shape a window picks for its client area (hand on a link, text bar,
+// hourglass…) is set by that window on WM_SETCURSOR and lands on the real
+// cursor, which is hidden but still pinned under the active seat. Reading it
+// back is one GetCursorInfo; system cursors are shared handles, so matching
+// against LoadCursor of each standard id is an exact comparison. Only the
+// active seat has the real cursor under it: the others show the arrow, or a
+// resize arrow on a window border.
+PointerShape ClientShapeOfRealCursor(POINT p) {
+    struct Std { LPCWSTR id; PointerShape shape; HCURSOR h; };
+    static Std known[] = {
+        { IDC_HAND, PointerShape::Hand, nullptr },       { IDC_IBEAM, PointerShape::IBeam, nullptr },
+        { IDC_NO, PointerShape::No, nullptr },           { IDC_WAIT, PointerShape::Wait, nullptr },
+        { IDC_APPSTARTING, PointerShape::AppStarting, nullptr },
+        { IDC_CROSS, PointerShape::Cross, nullptr },     { IDC_SIZEALL, PointerShape::SizeAll, nullptr },
+        { IDC_SIZEWE, PointerShape::SizeWE, nullptr },   { IDC_SIZENS, PointerShape::SizeNS, nullptr },
+        { IDC_SIZENWSE, PointerShape::SizeNWSE, nullptr }, { IDC_SIZENESW, PointerShape::SizeNESW, nullptr },
+    };
+    static bool loaded = false;
+    if (!loaded) { for (auto& k : known) k.h = LoadCursorW(nullptr, k.id); loaded = true; }
+    CURSORINFO ci{ sizeof(ci) };
+    if (!GetCursorInfo(&ci) || !ci.hCursor) return PointerShape::Arrow;
+    // The real cursor must actually sit where the seat points, or its shape
+    // belongs to somewhere else.
+    if (abs(ci.ptScreenPos.x - p.x) > 1 || abs(ci.ptScreenPos.y - p.y) > 1) return PointerShape::Arrow;
+    for (const auto& k : known) if (k.h == ci.hCursor) return k.shape;
+    return PointerShape::Arrow;
+}
+
+// The border hit-test is re-asked only when the pointer has moved, and at most
+// every 30 ms per seat; the timer flush (250 ms) catches the position the
+// throttle skipped. The client shape of the active seat is re-read on every
+// refresh, moved or not, because a window sets it a moment after the move
+// (and changes it on its own, the hourglass of a busy program). While the
+// seat holds a button the shape is left alone, so a resize in progress keeps
+// its arrow however far the pointer runs ahead of the window edge.
 void RefreshSeatShape(int seat) {
     if (!g_cursorHidden) return;           // the real cursor shows its own shape
-    static POINT  askedAt[kMaxSeats];
-    static bool   asked[kMaxSeats] = {};
-    static DWORD  askedTick[kMaxSeats] = {};
+    static POINT        askedAt[kMaxSeats];
+    static bool         asked[kMaxSeats] = {};
+    static DWORD        askedTick[kMaxSeats] = {};
+    static PointerShape border[kMaxSeats] = {};
     Seat& s = g_seats[seat];
     if (s.lDown || s.rDown || s.mDown) return;
-    if (asked[seat] && askedAt[seat].x == s.pos.x && askedAt[seat].y == s.pos.y) return;
-    const DWORD now = GetTickCount();
-    if (asked[seat] && now - askedTick[seat] < 30) return;
-    asked[seat] = true; askedAt[seat] = s.pos; askedTick[seat] = now;
     if (g_overShell && seat == g_activeSeat) return;
-    g_overlay[seat].SetShape(ResizeShapeAt(s.pos));
+    const bool moved = !asked[seat] || askedAt[seat].x != s.pos.x || askedAt[seat].y != s.pos.y;
+    const DWORD now = GetTickCount();
+    if (moved && (!asked[seat] || now - askedTick[seat] >= 30)) {
+        asked[seat] = true; askedAt[seat] = s.pos; askedTick[seat] = now;
+        border[seat] = ResizeShapeAt(s.pos);
+    } else if (moved) {
+        return;                            // throttled: the flush will come back
+    }
+    PointerShape shape = border[seat];
+    if (shape == PointerShape::Arrow && seat == g_activeSeat)
+        shape = ClientShapeOfRealCursor(s.pos);
+    g_overlay[seat].SetShape(shape);
 }
 
 void FlushPointers() {

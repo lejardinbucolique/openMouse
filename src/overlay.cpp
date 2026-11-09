@@ -201,6 +201,13 @@ static LPCWSTR ShapeCursorId(PointerShape shape) {
     case PointerShape::SizeNS:   return IDC_SIZENS;
     case PointerShape::SizeNWSE: return IDC_SIZENWSE;
     case PointerShape::SizeNESW: return IDC_SIZENESW;
+    case PointerShape::Hand:        return IDC_HAND;
+    case PointerShape::IBeam:       return IDC_IBEAM;
+    case PointerShape::No:          return IDC_NO;
+    case PointerShape::Wait:        return IDC_WAIT;
+    case PointerShape::AppStarting: return IDC_APPSTARTING;
+    case PointerShape::Cross:       return IDC_CROSS;
+    case PointerShape::SizeAll:     return IDC_SIZEALL;
     default:                     return IDC_ARROW;
     }
 }

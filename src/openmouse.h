@@ -236,9 +236,11 @@ bool ReadLearnResult(int& seat, std::wstring& sig, std::wstring& label);
 
 // One transparent, click-through, always-on-top window per seat, used to draw
 // that seat's pointer when it does not own the real system cursor.
-// What the arrow looks like: the plain arrow, or the system's resize arrows
-// when the pointer rests on a window border or corner that can be grabbed.
-enum class PointerShape { Arrow, SizeWE, SizeNS, SizeNWSE, SizeNESW };
+// What the arrow looks like: the plain arrow, the system's resize arrows when
+// the pointer rests on a window border or corner that can be grabbed, or the
+// shape the window under the active seat asked for (hand on a link, text bar…).
+enum class PointerShape { Arrow, SizeWE, SizeNS, SizeNWSE, SizeNESW,
+                          Hand, IBeam, No, Wait, AppStarting, Cross, SizeAll, Count };
 
 class CursorOverlay {
 public:
@@ -268,7 +270,7 @@ private:
     // One rendered bitmap per shape, built on first use, so a shape change on
     // the move path is a bitmap swap and not a rebuild.
     struct ShapeBmp { HBITMAP bmp = nullptr; int w = 0, h = 0, hotX = 1, hotY = 1; };
-    static constexpr int kShapes = 5;
+    static constexpr int kShapes = (int)PointerShape::Count;
     ShapeBmp     shapes_[kShapes];
     PointerShape shape_ = PointerShape::Arrow;
     COLORREF     color_ = 0;
