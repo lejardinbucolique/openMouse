@@ -9,6 +9,9 @@ MIT licensed. No kernel driver, no second Windows session, no paid tier.
 Named after Linux's Multi-Pointer X, which has offered this natively since 2008. Windows
 never got an equivalent.
 
+New to openMouse? Read the short user guide: [English](docs/HELP.md) ·
+[Français](docs/AIDE.md). The rest of this README is aimed at developers.
+
 ## Contents
 
 - [Status](#status)
