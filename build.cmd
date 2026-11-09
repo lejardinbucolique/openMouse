@@ -33,10 +33,13 @@ if "%OUT%"=="" set "OUT=openmouse.exe"
 cd /d "%~dp0"
 if not exist build mkdir build
 
+rc /nologo /fo build\openmouse.res res\openmouse.rc
+if errorlevel 1 exit /b 1
+
 cl /nologo /std:c++17 /EHsc /W4 /permissive- /O2 /MT /utf-8 ^
    /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
    /Fo:build\ /Fe:%OUT% ^
-   src\main.cpp src\devices.cpp src\overlay.cpp src\config.cpp src\settings.cpp ^
+   src\main.cpp src\devices.cpp src\overlay.cpp src\config.cpp src\settings.cpp build\openmouse.res ^
    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MANIFEST:EMBED ^
    user32.lib gdi32.lib shell32.lib ole32.lib uuid.lib advapi32.lib comctl32.lib
 exit /b %errorlevel%

@@ -22,6 +22,8 @@ namespace om {
 constexpr int   kMaxSeats        = 8;
 constexpr UINT  kTrayCallbackMsg = WM_APP + 1;
 constexpr UINT  kTrayIconId      = 1;
+// Id of the icon resource in res/openmouse.rc.
+constexpr WORD  kAppIconResource = 1;
 // Posted to the engine window by the settings window once it has written new
 // seat values to the configuration file: re-read them and use them at once.
 constexpr UINT  kReloadSettingsMsg = WM_APP + 2;

@@ -12,6 +12,10 @@ add_executable(openmouse WIN32
     src/settings.cpp
 )
 
+if(WIN32)
+    target_sources(openmouse PRIVATE res/openmouse.rc)
+endif()
+
 target_compile_definitions(openmouse PRIVATE
     UNICODE
     _UNICODE

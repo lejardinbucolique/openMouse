@@ -517,7 +517,13 @@ int RunSettings(HINSTANCE inst) {
     wc.lpfnWndProc   = SettingsProc;
     wc.hInstance     = inst;
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon         = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(kAppIconResource), IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+                                         LR_SHARED);
+    wc.hIconSm       = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(kAppIconResource), IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                         LR_SHARED);
+    if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
     wc.lpszClassName = kSettingsClass;
     RegisterClassExW(&wc);

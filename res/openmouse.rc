@@ -1,0 +1,4 @@
+// Application icon: the first icon resource is the one Explorer shows for
+// openmouse.exe and for any shortcut that does not name another.
+#define IDI_OPENMOUSE 1
+IDI_OPENMOUSE ICON "openmouse.ico"

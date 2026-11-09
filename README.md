@@ -367,7 +367,7 @@ same mitigation.
 - Seat counts above two are supported in code but only lightly tested on real hardware.
 - A new mouse that exposes several mouse collections can only be told from a ghost by its
   suffix; if the wrong one is seated, list the right interface in `[mouse]`.
-- The tray icon uses the generic application icon. The settings window covers speed and
+- The settings window covers speed and
   acceleration only; bindings and colours are still edited in the file.
 
 ## Building

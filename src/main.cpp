@@ -2496,7 +2496,12 @@ void TrayAdd(HWND hwnd) {
     nid.uID              = kTrayIconId;
     nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = kTrayCallbackMsg;
-    nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
+    // The tray draws at the small-icon size; asking for exactly that picks the
+    // matching frame of the .ico instead of a blurry rescale.
+    nid.hIcon = (HICON)LoadImageW(g_inst, MAKEINTRESOURCEW(kAppIconResource), IMAGE_ICON,
+                                  GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                  LR_SHARED);
+    if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(nid.szTip, UiFrench()
         ? L"openMouse : clic pour les réglages ou l'arrêt (urgence : Ctrl+Alt+Maj+Q)"
         : L"openMouse — click for settings or to stop (panic: Ctrl+Alt+Shift+Q)");
