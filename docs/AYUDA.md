@@ -1,6 +1,6 @@
 # openMouse: guía de uso
 
-*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md)*
+*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Русская версия](SPRAVKA.md)*
 
 > Esta traducción se hizo con la ayuda de una IA y no la ha revisado ninguna persona que
 > hable español. Las correcciones son bienvenidas: infórmelas como incidencia (issue) en el

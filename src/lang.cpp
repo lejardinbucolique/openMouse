@@ -20,6 +20,7 @@ constexpr wchar_t kHelpEn[] = L"https://github.com/lejardinbucolique/openMouse/b
 constexpr wchar_t kHelpFr[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AIDE.md";
 constexpr wchar_t kHelpDe[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/HILFE.md";
 constexpr wchar_t kHelpEs[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AYUDA.md";
+constexpr wchar_t kHelpRu[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/SPRAVKA.md";
 
 // In the order of the Lang enum.
 const LangInfo kLangs[kLangCount] = {
@@ -27,6 +28,7 @@ const LangInfo kLangs[kLangCount] = {
     { L"fr", L"Français", LANG_FRENCH,  false, L',', kHelpFr },
     { L"de", L"Deutsch",  LANG_GERMAN,  false, L',', kHelpDe },
     { L"es", L"Español",  LANG_SPANISH, false, L',', kHelpEs },
+    { L"ru", L"Русский",  LANG_RUSSIAN, false, L',', kHelpRu },
 };
 
 std::atomic<int> g_choice{ kLangAuto };
@@ -115,8 +117,29 @@ const wchar_t* const kMsgEs[(int)Msg::Count] = {
     L"Control del sistema",
 };
 
+const wchar_t* const kMsgRu[(int)Msg::Count] = {
+    L"openMouse: щёлкните, чтобы открыть параметры или выйти (экстренно: Ctrl+Alt+Shift+Q)",
+    L"openMouse без прав администратора",
+    L"Диспетчер задач и окна, запущенные от имени администратора, выйдут из-под управления мышей. Запустите openMouse снова и подтвердите запрос разрешения.",
+    L"openMouse: мышей — %d%s",
+    L", клавиатуры управляются",
+    L"Параметры…",
+    L"Открыть папку журнала",
+    L"Выйти из openMouse	Ctrl+Alt+Shift+Q",
+    L"Левая кнопка",
+    L"Правая кнопка",
+    L"Средняя кнопка",
+    L"Кнопка «Назад» (4)",
+    L"Кнопка «Вперёд» (5)",
+    L"Особая кнопка (0x%X)",
+    L"Клавиша мыши «%s»",
+    L"Мультимедийная клавиша",
+    L"Кнопка производителя",
+    L"Системная команда",
+};
+
 // In the order of the Lang enum.
-const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs };
+const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs, kMsgRu };
 
 } // namespace
 
