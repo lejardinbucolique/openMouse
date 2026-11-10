@@ -54,7 +54,8 @@ enum Str {
     sLook, sColorLabel, sStyleLabel, sColorCustom,
     sStyle0, sStyle1, sStyle2, sStyle3, sStyle4,
     sCol0, sCol1, sCol2, sCol3, sCol4, sCol5, sCol6, sCol7, sCol8, sCol9,
-    sFixed, sExplainFixed, sExplainAccel, sSeatAbsent, sStrCount
+    sFixed, sExplainFixed, sExplainAccel, sSeatAbsent,
+    sTouchpad, sPadCut, sPadMode, sPadAuto, sPadOn, sPadOff, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -123,6 +124,12 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Every movement is multiplied by the same value.",
     L"Slow for small gestures, fast for wide ones. The threshold sets where it speeds up.",
     L" (unplugged)",
+    L"Touchpad",
+    L" (cut off)",
+    L"Touchpad mode",
+    L"Automatic (cut off from two mice on)",
+    L"Always on",
+    L"Cut off (kept when no other mouse)",
 };
 
 const wchar_t* const kStrFr[sStrCount] = {
@@ -191,6 +198,12 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Chaque mouvement est multiplié par la même valeur.",
     L"Lent pour les petits gestes, rapide pour les grands. Le seuil règle où ça accélère.",
     L" (débranchée)",
+    L"Pavé tactile",
+    L" (coupé)",
+    L"Mode du pavé tactile",
+    L"Automatique (coupé dès deux souris)",
+    L"Toujours actif",
+    L"Coupé (gardé s'il n'y a pas d'autre souris)",
 };
 
 // The colours offered for a mouse; the first one is the default of seat 0.
@@ -224,7 +237,8 @@ constexpr int kIdClose   = 901;
 constexpr int kIdAutostart = 902;
 enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
                cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget,
-               cColorLabel = 23, cColor, cStyleLabel, cStyle, cPreview, cFixed, cExplain };
+               cColorLabel = 23, cColor, cStyleLabel, cStyle, cPreview, cFixed, cExplain,
+               cPadLabel, cPad };
 int CtlId(int seat, int ctl) { return kIdBase + seat * kPerSeat + ctl; }
 
 constexpr UINT_PTR kTimerApply = 1, kTimerLearn = 2, kTimerAutostart = 3;
@@ -239,6 +253,7 @@ struct SeatUi {
     HWND learn = nullptr, note = nullptr, list = nullptr, action = nullptr, keys = nullptr,
          win = nullptr, forget = nullptr;
     HWND colorLabel = nullptr, color = nullptr, styleLabel = nullptr, style = nullptr, preview = nullptr;
+    HWND padLabel = nullptr, pad = nullptr;   // the touchpad mode, shown in its section only
     RECT header{};   // swatch and title, painted by the panel (content coordinates)
 };
 
@@ -267,6 +282,7 @@ struct State {
     int     learning = -1;                       // seat the engine is listening to, or -1
     int     capturing = -1;                      // seat whose shortcut is being typed, or -1
     UINT    present = ~0u;                       // seats whose mouse is plugged in (bit mask), as the engine said
+    int     padSeat = -1;                        // the seat of the laptop touchpad, or -1 without one
 } g;
 
 int Px(int dip) { return MulDiv(dip, (int)g.dpi, 96); }
@@ -321,6 +337,14 @@ std::wstring Format(Field f, double v) {
     return buf;
 }
 
+// The seat the engine gave the laptop touchpad: it keeps it even while the
+// touchpad is cut off, so its section is there to switch it back on.
+int TouchpadSeat(const Config& c) {
+    for (const auto& kv : c.mouseBinding)
+        if (IsIntegratedPointer(kv.first) && kv.second < c.seatCount) return kv.second;
+    return -1;
+}
+
 // ---------------------------------------------------------------- apply
 
 void SetStatus(const std::wstring& text) { SetWindowTextW(g.status, text.c_str()); }
@@ -339,6 +363,7 @@ void Apply() {
         disk.cursorStyle[i] = g.cur.cursorStyle[i];
         disk.buttons[i]     = g.cur.buttons[i];
     }
+    disk.touchpad = g.cur.touchpad;
     if (!disk.Save(g.path)) {
         wchar_t buf[MAX_PATH + 64];
         swprintf(buf, MAX_PATH + 64, S(sSaveFailed), g.path.c_str());
@@ -767,8 +792,21 @@ void ShowSeat(int seat) {
     }
     SendMessageW(u.screen, CB_SETCURSEL, sel, 0);
 
+    const bool pad = seat == g.padSeat;
+    ShowWindow(u.padLabel, pad ? SW_SHOWNA : SW_HIDE);
+    ShowWindow(u.pad, pad ? SW_SHOWNA : SW_HIDE);
+    if (pad) SendMessageW(u.pad, CB_SETCURSEL, (WPARAM)g.cur.touchpad, 0);
+
     ShowLook(seat);
     ShowButtons(seat);
+}
+
+// Applied by the engine at once: it seats the touchpad or cuts it off.
+void OnPadMode(int seat) {
+    const int sel = (int)SendMessageW(g.ui[seat].pad, CB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel > 2) return;
+    g.cur.touchpad = (Config::Touchpad)sel;
+    Apply();
 }
 
 void OnScreen(int seat) {
@@ -795,6 +833,9 @@ void CreateSeatControls(int i) {
     const wchar_t* names[fFieldCount] = { S(sSensitivity), S(sSlow), S(sFast), S(sSpeed) };
     HWND p = g.panel;
     SeatUi& u = g.ui[i];
+    u.padLabel = Make(p, L"STATIC", S(sPadMode), SS_LEFT, CtlId(i, cPadLabel));
+    u.pad = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cPad));
+    for (Str k : { sPadAuto, sPadOn, sPadOff }) SendMessageW(u.pad, CB_ADDSTRING, 0, (LPARAM)S(k));
     u.colorLabel = Make(p, L"STATIC", S(sColorLabel), SS_LEFT, CtlId(i, cColorLabel));
     u.color = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cColor));
     u.styleLabel = Make(p, L"STATIC", S(sStyleLabel), SS_LEFT, CtlId(i, cStyleLabel));
@@ -896,6 +937,12 @@ int LayoutSeat(int i, int x, int y) {
     };
     u.header = { x, y, x + colW, y + Px(24) };
     y += Px(34);
+    if (i == g.padSeat) {
+        place(u.padLabel, x, y, colW, Px(18));
+        y += Px(20);
+        place(u.pad, x, y, colW, Px(200));
+        y += Px(32);
+    }
     place(u.colorLabel, x, y, colW, Px(18));
     y += Px(20);
     place(u.color, x, y, colW, Px(200));
@@ -1052,9 +1099,11 @@ void PaintPanel(HWND hwnd) {
         DeleteObject(b);
         FrameRect(dc, &swatch, GetSysColorBrush(COLOR_GRAYTEXT));
         wchar_t title[64];
-        swprintf(title, 64, S(sSeat), i + 1);
+        const bool pad = i == g.padSeat;
+        if (pad) wcscpy_s(title, S(sTouchpad));
+        else     swprintf(title, 64, S(sSeat), i + 1);
         const bool absent = !(g.present & (1u << i));
-        if (absent) wcscat_s(title, S(sSeatAbsent));
+        if (absent) wcscat_s(title, S(pad ? sPadCut : sSeatAbsent));
         RECT tr{ h.left + sw + Px(8), h.top, h.right, h.bottom };
         SetTextColor(dc, GetSysColor(absent ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
         DrawTextW(dc, title, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -1207,7 +1256,11 @@ void FitWindow(HWND hwnd) {
 void OnSeats(HWND hwnd, UINT present) {
     g.present = present;
     Config disk;
-    if (disk.Load(g.path) && disk.seatCount > g.seats) {
+    if (!disk.Load(g.path)) { InvalidateRect(g.panel, nullptr, TRUE); return; }
+    const int pad = TouchpadSeat(disk);
+    const bool padMoved = pad != g.padSeat;
+    g.padSeat = pad;
+    if (disk.seatCount > g.seats) {
         const int old = g.seats;
         g.seats = disk.seatCount;
         EnsureSeats(g.opened, g.seats);
@@ -1223,6 +1276,9 @@ void OnSeats(HWND hwnd, UINT present) {
             }
             CreateSeatControls(i);
         }
+        FitWindow(hwnd);
+    } else if (padMoved) {
+        for (int i = 0; i < g.seats; ++i) ShowSeat(i);
         FitWindow(hwnd);
     }
     InvalidateRect(g.panel, nullptr, TRUE);
@@ -1251,6 +1307,7 @@ void OnCommand(HWND hwnd, int id) {
             g.cur.seatColors[i]  = g.opened.seatColors[i];
             g.cur.cursorStyle[i] = g.opened.cursorStyle[i];
             g.cur.buttons[i]     = g.opened.buttons[i];
+            g.cur.touchpad       = g.opened.touchpad;
             g.sel[i] = 0;
             g.note[i].clear();
             ShowSeat(i);
@@ -1272,6 +1329,7 @@ void OnCommand(HWND hwnd, int id) {
         g.cur.accel[seat]       = Config::Accel{};
         g.cur.screen[seat].clear();
         g.cur.cursorStyle[seat] = (int)kStyleBright;
+        if (seat == g.padSeat) g.cur.touchpad = Config::Touchpad::Auto;
         ShowSeat(seat);
         Apply();
     } else if (ctl == cLearn) {
@@ -1302,6 +1360,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 else if (ctl == cStyle)  OnStyle(seat);
                 else if (ctl == cList)   OnListSelect(seat);
                 else if (ctl == cAction) OnActionSelect(seat);
+                else if (ctl == cPad)    OnPadMode(seat);
             }
         }
         return 0;
@@ -1373,6 +1432,7 @@ int RunSettings(HINSTANCE inst) {
     g.seats = g.opened.seatCount;
     EnsureSeats(g.opened, g.seats);
     g.cur = g.opened;
+    g.padSeat = TouchpadSeat(g.opened);
     g.screens = ListScreens();
 
     WNDCLASSEXW wc{};

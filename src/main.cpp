@@ -1867,8 +1867,9 @@ int OwnerSeatOf(const std::wstring& path) {
 //   - two or more       : the mice only, the touchpad is cut off.
 // touchpad=on / off in the ini overrides this (off still yields to the safety
 // rule: with no external mouse the touchpad is kept, never leave no pointer).
-// A touchpad keeps its seat in the ini while it is cut off, so it comes back
-// with the same colour and speed. Only one interface of it is ever seated.
+// A touchpad has its seat in the ini even while it is cut off, so it comes
+// back with the same colour and speed, and the settings window can show it.
+// Only one interface of it is ever seated.
 void SeatTouchpad(const std::vector<DeviceInfo>& devices,
                   std::map<std::wstring, const wchar_t*>& deadWhy,
                   std::set<std::wstring>& cutOff) {
@@ -1896,10 +1897,11 @@ void SeatTouchpad(const std::vector<DeviceInfo>& devices,
             cutOff.insert(d.path);
             continue;
         }
+        // Seated even while cut off, so that the settings window always has
+        // its section to switch it back on from.
         if (!active) {
             deadWhy[d.path] = L"touchpad cut off";
             cutOff.insert(d.path);
-            continue;
         }
         if (g_cfg.mouseBinding.count(d.path)) continue;
         // Same touchpad under a new instance id: take over its seat.
