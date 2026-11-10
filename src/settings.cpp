@@ -579,8 +579,94 @@ const wchar_t* const kStrZh[sStrCount] = {
     L"已学习的按键在其所属鼠标的指针位置生效。",
 };
 
+const wchar_t* const kStrAr[sStrCount] = {
+    L"إعدادات openMouse",
+    L"الماوس %d",
+    L"الحساسية",
+    L"التسارع التدريجي",
+    L"الحركة البطيئة (للدقة)",
+    L"الحركة السريعة (لعبور الشاشة)",
+    L"عتبة التسارع",
+    L"الحصر داخل الشاشة",
+    L"لا، سطح المكتب بأكمله",
+    L"الشاشة %d: %d × %d",
+    L" (الرئيسية)",
+    L"%s (غير متصل)",
+    L"القيم الافتراضية",
+    L"التراجع عن تغييراتي",
+    L"إغلاق",
+    L"تُطبَّق التغييرات فورًا.",
+    L"تم التطبيق والحفظ.",
+    L"تم الحفظ. openMouse لا يعمل: ستُستخدم الإعدادات عند التشغيل التالي.",
+    L"تعذّر حفظ %s",
+    L"تعلّم زر",
+    L"نسيان",
+    L"اضغط على الزر المراد تعلّمه (8 ثوانٍ)…",
+    L"لم تصل أي إشارة: هذا الزر لا يرسل شيئًا إلى Windows (لا يقرؤه إلا برنامج الشركة المصنّعة)، "
+    L"أو أنه ليس في هذا الماوس.",
+    L"هذا الماوس غير متصل.",
+    L"openMouse لا يعمل: لا يوجد ما يمكن الاستماع إليه.",
+    L"تم تعلّم الزر. اختر ما يفعله.",
+    L"تم تعلّم هذا الزر من قبل.",
+    L"لدى هذا الماوس %d أزرار متعلَّمة بالفعل: انسَ أحدها أولًا.",
+    L"لا يوجد زر متعلَّم. تعلّم زرًّا لتعيين إجراء له.",
+    L"يحتفظ Windows أيضًا بإجراء خاص به لهذا الزر.",
+    L"عدم فعل أي شيء",
+    L"نقرة بالزر الأيسر",
+    L"نقرة بالزر الأيمن",
+    L"نقرة بالزر الأوسط",
+    L"زر الرجوع",
+    L"زر التقدّم",
+    L"اختصار لوحة المفاتيح",
+    L"اختر الاختصار…",
+    L"اضغط على الاختصار…",
+    L"Win +‎",
+    L"Ctrl", L"Alt", L"Shift", L"Win",
+    L"عام",
+    L"تشغيل openMouse مع Windows",
+    L"سيبدأ openMouse تلقائيًا عند تسجيل دخولك إلى Windows.",
+    L"لن يبدأ openMouse مع Windows بعد الآن.",
+    L"في انتظار تأكيد Windows…",
+    L"لم يقبل Windows هذا التغيير. شغّل openMouse بصلاحيات المسؤول ثم أعد المحاولة.",
+    L"تم الإلغاء: رُفض إذن المسؤول ولم يتغيّر شيء.",
+    L"لا يتوفر التشغيل مع Windows إلا بعد تثبيت openMouse بواسطة برنامج التثبيت في مجلد محمي.",
+    L"تشير مهمة التشغيل مع Windows إلى مجلد يمكن للبرامج العادية تعديله. ألغِ تحديد المربع لإزالتها.",
+    L"مظهر المؤشر",
+    L"اللون",
+    L"نمط المؤشر",
+    L"مخصّص (%06X)",
+    L"كلاسيكي (جسم ملوّن وحافة سوداء)",
+    L"حافة ساطعة (تظهر على أي خلفية)",
+    L"جسم أبيض وحافة ملوّنة",
+    L"كبير بحافة ساطعة",
+    L"توهّج ناعم",
+    L"أصفر", L"برتقالي", L"أحمر", L"وردي", L"أرجواني", L"أزرق", L"سماوي", L"أخضر", L"أخضر ليموني", L"أبيض",
+    L"حساسية ثابتة",
+    L"تُضرب كل حركة في القيمة نفسها.",
+    L"بطيء مع الحركات الصغيرة وسريع مع الحركات الواسعة. تحدّد العتبة النقطة التي يبدأ عندها التسارع.",
+    L" (غير متصل)",
+    L"حول البرنامج: ابتكر Alston Mendonca برنامج openMouse، وتولّت Calepitool تحسينه ومواصلة تطويره.",
+    L"لوحة اللمس",
+    L" (مقطوعة)",
+    L"وضع لوحة اللمس",
+    L"تلقائي (تُقطع عند وجود ماوسين)",
+    L"مفعّلة دائمًا",
+    L"مقطوعة (تبقى عند عدم وجود ماوس آخر)",
+    L"تعطيل",
+    L"ماوس %s",
+    L"ماوس %s (%d)",
+    L"لا يمكن تعطيل آخر ماوس يعمل: يجب أن يبقى مؤشر واحد على الأقل.",
+    L"الماوسات",
+    L"اللغة",
+    L"تلقائي (لغة Windows)",
+    L"مساعدة",
+    L"تعذّر فتح صفحة المساعدة.",
+    L"يعمل كل ماوس بأحد الوضعين: تظهر منزلقات الوضع الآخر بلون رمادي.",
+    L"يعمل الزر المتعلَّم عند موضع مؤشر الماوس الخاص به.",
+};
+
 // In the order of the Lang enum. An entry left empty falls back to English.
-const wchar_t* const* const kStr[kLangCount] = { kStrEn, kStrFr, kStrDe, kStrEs, kStrRu, kStrZh };
+const wchar_t* const* const kStr[kLangCount] = { kStrEn, kStrFr, kStrDe, kStrEs, kStrRu, kStrZh, kStrAr };
 
 // The colours offered for a mouse; the first one is the default of seat 0.
 const COLORREF kColors[10] = {
@@ -734,7 +820,10 @@ void EnsureSeats(Config& c, int n) {
 
 std::wstring Format(Field f, double v) {
     wchar_t buf[32];
-    swprintf(buf, 32, kRange[f].fmt, v);
+    // The number keeps its left-to-right look (a mark in front) inside a right-to-left line.
+    int lead = 0;
+    if (UiRtl()) buf[lead++] = 0x200E;   // LEFT-TO-RIGHT MARK
+    swprintf(buf + lead, 32 - lead, kRange[f].fmt, v);
     const wchar_t dec = LangData(UiLang()).decimal;
     if (dec != L'.')
         for (wchar_t* p = buf; *p; ++p) if (*p == L'.') *p = dec;
@@ -981,7 +1070,7 @@ std::wstring ShortcutText(UINT mods, UINT vk) {
 // What the list of a seat shows for one learned button.
 std::wstring ListText(const ButtonMap& b) {
     std::wstring s = b.label.empty() ? b.sig : b.label;
-    s += L"  →  ";
+    s += UiRtl() ? L"  ←  " : L"  →  ";   // the arrow points from the button to its action
     s += (b.action == kActKeys && b.vk) ? ShortcutText(b.mods, b.vk) : std::wstring(ActionName(b.action));
     return s;
 }
@@ -1668,10 +1757,30 @@ int ButtonWidth(HWND h, int minDip) {
     return sz.cx + Px(28) > Px(minDip) ? sz.cx + Px(28) : Px(minDip);
 }
 
-// The one place where a position along the line of text is decided: today every
-// language reads left to right, so it is the identity; a right-to-left language
-// mirrors the footer and the general page here, and the rest follows.
-int Lx(int x, int w, int total) { return UiRtl() ? total - x - w : x; }
+// A right-to-left language mirrors the whole window (the tabs, the footer, the
+// pages, the scroll bar, the text alignment), and Windows does it: the layout
+// below is always computed left to right and the system flips what is drawn.
+void SetMirror(HWND h, bool rtl) {
+    const LONG_PTR bits = WS_EX_LAYOUTRTL | WS_EX_RTLREADING;
+    const LONG_PTR ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+    const LONG_PTR want = rtl ? (ex | bits) : (ex & ~bits);
+    if (want != ex) SetWindowLongPtrW(h, GWL_EXSTYLE, want);
+}
+
+BOOL CALLBACK MirrorProc(HWND h, LPARAM lp) {
+    SetMirror(h, lp != 0);
+    return TRUE;
+}
+
+void ApplyDirection(HWND hwnd) {
+    const bool rtl = UiRtl();
+    SetMirror(hwnd, rtl);
+    EnumChildWindows(hwnd, MirrorProc, rtl ? 1 : 0);
+    if (g.tip) SetMirror(g.tip, rtl);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+}
 
 // The font of the interface of Windows in the language Windows is set to: it is
 // the one that has the letters of that language. Segoe UI when it cannot be read.
@@ -1743,27 +1852,27 @@ SIZE Layout(HWND hwnd) {
 
     // The general page: the box, its note, the language, the help, the credits.
     int gy = m;
-    place(g.autostart, Lx(m, inner, width), gy, inner, Px(22));
+    place(g.autostart, m, gy, inner, Px(22));
     gy += Px(22);
     if (g.autoRoom) {
         const int noteW = inner - Px(20);
         const int noteH = TextHeight(g.autoNote, noteW);
-        place(g.autoNote, Lx(m + Px(20), noteW, width), gy + Px(2), noteW, noteH);
+        place(g.autoNote, m + Px(20), gy + Px(2), noteW, noteH);
         gy += noteH + Px(8);
     }
     gy += Px(16);
-    place(g.langLabel, Lx(m, inner, width), gy, inner, Px(18));
+    place(g.langLabel, m, gy, inner, Px(18));
     gy += Px(20);
     const int langW = Px(300);
-    place(g.lang, Lx(m, langW, width), gy, langW, Px(200));
+    place(g.lang, m, gy, langW, Px(200));
     gy += Px(38);
     const int helpW = ButtonWidth(g.help, 100);
-    place(g.help, Lx(m, helpW, width), gy, helpW, Px(28));
+    place(g.help, m, gy, helpW, Px(28));
     gy += Px(28) + Px(24);
     const int aboutH = TextHeight(g.about, inner);
-    place(g.about, Lx(m, inner, width), gy, inner, aboutH);
+    place(g.about, m, gy, inner, aboutH);
     gy += aboutH;
-    place(g.site, Lx(m, inner, width), gy, inner, Px(18));
+    place(g.site, m, gy, inner, Px(18));
     gy += Px(18) + m;
     const int generalH = gy;
 
@@ -1797,17 +1906,17 @@ SIZE Layout(HWND hwnd) {
     ShowWindow(g.panel, g.curTab == tabMice ? SW_SHOWNA : SW_HIDE);
 
     int y = tabH + (g.curTab == tabGeneral ? generalH : panelH);
-    place(g.hint, Lx(m, totalW - m * 2, totalW), y + Px(10), totalW - m * 2, hintH);
+    place(g.hint, m, y + Px(10), totalW - m * 2, hintH);
     y += Px(10) + hintH + Px(6);
     const int closeW = ButtonWidth(g.close, 90), undoW = ButtonWidth(g.undo, 90), h = Px(30);
     const int gap = Px(10);
     const int closeX = totalW - m - closeW;
     const int undoX  = closeX - gap - undoW;
-    place(g.close, Lx(closeX, closeW, totalW), y + (rowH - h) / 2, closeW, h);
-    place(g.undo,  Lx(undoX, undoW, totalW),   y + (rowH - h) / 2, undoW, h);
+    place(g.close, closeX, y + (rowH - h) / 2, closeW, h);
+    place(g.undo,  undoX,   y + (rowH - h) / 2, undoW, h);
     // The status takes what is left of the row, on the side of the reading.
     const int statusW = undoX - gap - m;
-    const int statusX = Lx(m, statusW, totalW);
+    const int statusX = m;
     g.statusRow = { statusX, y, statusX + statusW, y + rowH };
     PlaceStatus();
     y += rowH + m;
@@ -1847,7 +1956,8 @@ void PaintPanel(HWND hwnd) {
         // The "Disable" box sits at the right end of the row: the title gives it room.
         RECT tr{ h.left + sw + Px(8), h.top, pad ? h.right : h.right - g.offW - Px(4), h.bottom };
         SetTextColor(dc, GetSysColor(absent || g.off[i] ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
-        DrawTextW(dc, title.c_str(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        DrawTextW(dc, title.c_str(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS |
+                  (UiRtl() ? DT_RTLREADING : 0));
         RECT line{ h.left, h.bottom + Px(4), h.right, h.bottom + Px(5) };
         FillRect(dc, &line, GetSysColorBrush(COLOR_3DLIGHT));
     }
@@ -1867,6 +1977,7 @@ struct PreviewCache {
 void PaintPreview(HWND hwnd) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd, &ps);
+    SetLayout(dc, 0);   // a mirrored window would flip the pointers: the preview is drawn as it is
     int seat = 0, ctl = 0;
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -2071,6 +2182,7 @@ void OnHelp(HWND hwnd) {
 
 // A new language: every text of the window, then the size that fits them.
 void RefreshTexts(HWND hwnd) {
+    ApplyDirection(hwnd);
     SetCommonTexts(hwnd);
     for (int i = 0; i < g.seats; ++i) {
         g.note[i].clear();
@@ -2323,6 +2435,7 @@ int RunSettings(HINSTANCE inst) {
     g.dpi = DpiOf(hwnd);
 
     CreateControls(hwnd, inst);
+    ApplyDirection(hwnd);
     if (!g.panel || !g.page || !g.tab) return 1;
     const SIZE client = Layout(hwnd);
     const RECT wr = WindowRectFor(client, style);

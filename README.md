@@ -10,7 +10,7 @@ Named after Linux's Multi-Pointer X, which has offered this natively since 2008.
 never got an equivalent.
 
 New to openMouse? Read the short user guide: [English](docs/HELP.md) ·
-[Français](docs/AIDE.md) · [Deutsch](docs/HILFE.md) · [Español](docs/AYUDA.md) · [Русский](docs/SPRAVKA.md) · [简体中文](docs/BANGZHU.md). The rest of this README is
+[Français](docs/AIDE.md) · [Deutsch](docs/HILFE.md) · [Español](docs/AYUDA.md) · [Русский](docs/SPRAVKA.md) · [简体中文](docs/BANGZHU.md) · [العربية](docs/DALIL.md). The rest of this README is
 aimed at developers.
 
 ## Contents
@@ -185,7 +185,7 @@ written to the configuration file and taken by the running engine at once; **Und
 changes** puts back the mouse values the window opened with. The window has two tabs,
 **General** (start with Windows, language, help, credits) and **Mice** (one section per
 mouse), and runs as a process of its own, so it never shares a thread with the input path.
-It speaks English, French, German, Spanish, Russian or Simplified Chinese: the language of Windows by default, or the one chosen in the
+It speaks English, French, German, Spanish, Russian, Simplified Chinese or Arabic (the window is then mirrored, right to left): the language of Windows by default, or the one chosen in the
 General tab (`language` in the ini), applied at once to the window, the tray menu and the
 messages. Device bindings and the seat count are still set in the file for now.
 
@@ -197,7 +197,7 @@ seats=2
 touchpad=auto         ; auto | on | off, see below
 capture_keyboards=0
 mark_active_seat=1
-language=auto         ; auto (language of Windows) | en | fr | de | es | ru | zh-CN
+language=auto         ; auto (language of Windows) | en | fr | de | es | ru | zh-CN | ar
 
 [seat0]
 color=FFDD00          ; FFFFFF renders the stock white arrow, 000000 the black scheme
@@ -545,6 +545,7 @@ The interface (settings window, tray menu and messages) and the user guide are a
 | Español | `es` | [AYUDA.md](docs/AYUDA.md) |
 | Русский | `ru` | [SPRAVKA.md](docs/SPRAVKA.md) |
 | 简体中文 | `zh-CN` | [BANGZHU.md](docs/BANGZHU.md) |
+| العربية | `ar` | [DALIL.md](docs/DALIL.md) |
 
 The translations other than the project's own languages are made with the help of an AI and
 have not been proofread by a person who speaks the language. Corrections are welcome: report
@@ -552,7 +553,7 @@ them as an issue on the [GitHub repository of the fork](https://github.com/lejar
 Adding a language is described next to the `Lang` enum in `src/openmouse.h`.
 
 **Traductions.** L'interface (fenêtre des réglages, menu de l'icône et messages) et le mode
-d'emploi existent en anglais, en français, en allemand, en espagnol, en russe et en chinois simplifié (liste ci-dessus). Les traductions
+d'emploi existent en anglais, en français, en allemand, en espagnol, en russe, en chinois simplifié et en arabe (liste ci-dessus). Les traductions
 autres que celles du projet sont faites avec l'aide d'une IA, sans relecture par une personne
 qui parle la langue. Les corrections sont les bienvenues : à signaler par un ticket sur le
 [dépôt GitHub du fork](https://github.com/lejardinbucolique/openMouse/issues).

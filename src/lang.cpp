@@ -7,8 +7,8 @@
 //
 // The text is Unicode throughout and the fonts come from Windows, so languages
 // the Latin alphabet does not cover (Russian, Chinese, Arabic) only need their
-// tables. Nothing is mirrored for right-to-left languages yet: UiRtl() is the
-// one place that will tell the layout to.
+// tables. A right-to-left language (Arabic) also has LangInfo::rtl set: the
+// settings window and the tray menu are then mirrored (UiRtl()).
 #include "openmouse.h"
 #include <atomic>
 
@@ -22,6 +22,7 @@ constexpr wchar_t kHelpDe[] = L"https://github.com/lejardinbucolique/openMouse/b
 constexpr wchar_t kHelpEs[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AYUDA.md";
 constexpr wchar_t kHelpRu[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/SPRAVKA.md";
 constexpr wchar_t kHelpZh[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/BANGZHU.md";
+constexpr wchar_t kHelpAr[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/DALIL.md";
 
 // In the order of the Lang enum.
 const LangInfo kLangs[kLangCount] = {
@@ -31,6 +32,7 @@ const LangInfo kLangs[kLangCount] = {
     { L"es", L"Español",  LANG_SPANISH, false, L',', kHelpEs },
     { L"ru", L"Русский",  LANG_RUSSIAN, false, L',', kHelpRu },
     { L"zh-CN", L"简体中文", LANG_CHINESE, false, L'.', kHelpZh },
+    { L"ar", L"العربية", LANG_ARABIC, true, L'.', kHelpAr },
 };
 
 std::atomic<int> g_choice{ kLangAuto };
@@ -161,8 +163,29 @@ const wchar_t* const kMsgZh[(int)Msg::Count] = {
     L"系统控制",
 };
 
+const wchar_t* const kMsgAr[(int)Msg::Count] = {
+    L"openMouse: انقر لفتح الإعدادات أو للإيقاف (للطوارئ: Ctrl+Alt+Shift+Q)",
+    L"openMouse بدون صلاحيات المسؤول",
+    L"ستفلت إدارة المهام والنوافذ التي تعمل بصلاحيات المسؤول من تحكّم الماوس. أعد تشغيل openMouse ووافق على طلب الإذن.",
+    L"openMouse: عدد الماوسات %d%s",
+    L"، ولوحات المفاتيح موجَّهة",
+    L"الإعدادات…",
+    L"فتح مجلد السجل",
+    L"إيقاف openMouse	Ctrl+Alt+Shift+Q",
+    L"الزر الأيسر",
+    L"الزر الأيمن",
+    L"الزر الأوسط",
+    L"زر الرجوع (4)",
+    L"زر التقدّم (5)",
+    L"زر خاص (0x%X)",
+    L"زر الماوس «%s»",
+    L"مفتاح الوسائط",
+    L"زر الشركة المصنّعة",
+    L"التحكم في النظام",
+};
+
 // In the order of the Lang enum.
-const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs, kMsgRu, kMsgZh };
+const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs, kMsgRu, kMsgZh, kMsgAr };
 
 } // namespace
 

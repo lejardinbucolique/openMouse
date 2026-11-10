@@ -1,6 +1,6 @@
 # openMouse：使用指南
 
-*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Versión en español](AYUDA.md) · [Русская версия](SPRAVKA.md)*
+*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Versión en español](AYUDA.md) · [Русская версия](SPRAVKA.md) · [النسخة العربية](DALIL.md)*
 
 > 本译文借助 AI 完成，尚未经过会说中文的人审校。欢迎提出修改意见：请在
 > [GitHub 仓库](https://github.com/lejardinbucolique/openMouse/issues)中以议题（issue）的形式提交。
@@ -57,8 +57,8 @@ openMouse**。只有把 openMouse 安装到受保护的文件夹（例如 `Progr
 ### “常规”选项卡
 
 - **随 Windows 启动 openMouse**：参见上文“启动”。
-- **语言**：“自动（Windows 语言）”“Français”“English”“Deutsch”“Español”“Русский”或
-  “简体中文”。所选语言会立即应用于窗口、图标菜单和 openMouse 的提示信息，并会被记住。
+- **语言**：“自动（Windows 语言）”“Français”“English”“Deutsch”“Español”“Русский”“简体中文”或
+  “العربية”。所选语言会立即应用于窗口、图标菜单和 openMouse 的提示信息，并会被记住。
 - **帮助**：在 GitHub 上以所选语言打开本指南。
 - **关于**：制作人员名单，以及 Calepitool 网站的链接。
 

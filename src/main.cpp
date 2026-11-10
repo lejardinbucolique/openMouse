@@ -3409,7 +3409,7 @@ void TrayMenu(HWND hwnd) {
     // refuses to dismiss when the user clicks away. Documented quirk.
     SetForegroundWindow(hwnd);
     const UINT cmd = (UINT)TrackPopupMenu(menu,
-        TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
+        TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | (UiRtl() ? TPM_LAYOUTRTL : 0), pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(menu);
 
     switch (cmd) {

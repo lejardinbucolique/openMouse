@@ -339,16 +339,17 @@ int  RunSettings(HINSTANCE inst);
 
 // The languages the program speaks. To add one: a value here (before Count), a
 // line in kLangs (lang.cpp), a table in kMsgs (lang.cpp) and one in kStr
-// (settings.cpp), and a user guide for the Help button. No layout code changes;
+// (settings.cpp), and a user guide for the Help button. No layout code changes
+// (a right-to-left language only sets "rtl" and the windows mirror themselves);
 // a missing table entry falls back to English.
-enum class Lang { En = 0, Fr, De, Es, Ru, Zh, Count };
+enum class Lang { En = 0, Fr, De, Es, Ru, Zh, Ar, Count };
 constexpr int kLangCount = (int)Lang::Count;
 
 struct LangInfo {
     const wchar_t* code;       // value of "language=" in the ini
     const wchar_t* name;       // the language's own name, as the choice list shows it
     WORD           primary;    // primary Windows language id, for "automatic"
-    bool           rtl;        // written right to left (nothing is mirrored yet)
+    bool           rtl;        // written right to left (the windows are then mirrored)
     wchar_t        decimal;    // decimal separator of the numbers the windows show
     const wchar_t* helpUrl;    // fixed address of the user guide in this language
 };
