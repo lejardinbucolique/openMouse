@@ -1,6 +1,6 @@
 # openMouse: user guide
 
-*[Version française](AIDE.md)*
+*[Version française](AIDE.md) · [Deutsche Version](HILFE.md)*
 
 openMouse gives every connected mouse its own pointer on the same Windows desktop. Two
 people can work at one PC at the same time, each with their own mouse: one clicks here
@@ -58,7 +58,7 @@ restores the mouse values the window opened with. These two buttons and the stat
 ### General tab
 
 - **Start openMouse with Windows**: see "Start" above.
-- **Language**: "Automatic (Windows language)", "Français" or "English". The choice applies
+- **Language**: "Automatic (Windows language)", "Français", "English" or "Deutsch". The choice applies
   at once to the window, the icon menu and openMouse's messages, and is remembered.
 - **Help**: opens this guide, in the chosen language, on GitHub.
 - **About**: the credits, with the link to the Calepitool site.

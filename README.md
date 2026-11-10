@@ -10,7 +10,8 @@ Named after Linux's Multi-Pointer X, which has offered this natively since 2008.
 never got an equivalent.
 
 New to openMouse? Read the short user guide: [English](docs/HELP.md) ·
-[Français](docs/AIDE.md). The rest of this README is aimed at developers.
+[Français](docs/AIDE.md) · [Deutsch](docs/HILFE.md). The rest of this README is aimed at
+developers.
 
 ## Contents
 
@@ -26,6 +27,7 @@ New to openMouse? Read the short user guide: [English](docs/HELP.md) ·
 - [How it works](#how-it-works)
 - [Findings](#findings)
 - [Known limitations](#known-limitations)
+- [Translations](#translations)
 - [Building](#building)
 - [Licence](#licence)
 
@@ -183,7 +185,7 @@ written to the configuration file and taken by the running engine at once; **Und
 changes** puts back the mouse values the window opened with. The window has two tabs,
 **General** (start with Windows, language, help, credits) and **Mice** (one section per
 mouse), and runs as a process of its own, so it never shares a thread with the input path.
-It speaks French or English: the language of Windows by default, or the one chosen in the
+It speaks English, French or German: the language of Windows by default, or the one chosen in the
 General tab (`language` in the ini), applied at once to the window, the tray menu and the
 messages. Device bindings and the seat count are still set in the file for now.
 
@@ -195,7 +197,7 @@ seats=2
 touchpad=auto         ; auto | on | off, see below
 capture_keyboards=0
 mark_active_seat=1
-language=auto         ; auto (language of Windows) | en | fr
+language=auto         ; auto (language of Windows) | en | fr | de
 
 [seat0]
 color=FFDD00          ; FFFFFF renders the stock white arrow, 000000 the black scheme
@@ -530,6 +532,27 @@ same mitigation.
   suffix; if the wrong one is seated, list the right interface in `[mouse]`.
 - The settings window covers colour, pointer set, speed, acceleration, screen, learned
   buttons and setting a mouse aside; bindings are still edited in the file.
+
+## Translations
+
+The interface (settings window, tray menu and messages) and the user guide are available in:
+
+| Language | Code (`language=`) | User guide |
+|---|---|---|
+| English | `en` | [HELP.md](docs/HELP.md) |
+| Français | `fr` | [AIDE.md](docs/AIDE.md) |
+| Deutsch | `de` | [HILFE.md](docs/HILFE.md) |
+
+The translations other than the project's own languages are made with the help of an AI and
+have not been proofread by a person who speaks the language. Corrections are welcome: report
+them as an issue on the [GitHub repository of the fork](https://github.com/lejardinbucolique/openMouse/issues).
+Adding a language is described next to the `Lang` enum in `src/openmouse.h`.
+
+**Traductions.** L'interface (fenêtre des réglages, menu de l'icône et messages) et le mode
+d'emploi existent en anglais, en français et en allemand (liste ci-dessus). Les traductions
+autres que celles du projet sont faites avec l'aide d'une IA, sans relecture par une personne
+qui parle la langue. Les corrections sont les bienvenues : à signaler par un ticket sur le
+[dépôt GitHub du fork](https://github.com/lejardinbucolique/openMouse/issues).
 
 ## Building
 

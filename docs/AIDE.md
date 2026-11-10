@@ -1,6 +1,6 @@
 # openMouse : mode d'emploi
 
-*[English version](HELP.md)*
+*[English version](HELP.md) · [Deutsche Version](HILFE.md)*
 
 openMouse donne à chaque souris branchée sa propre flèche sur le même écran Windows.
 Deux personnes peuvent ainsi travailler en même temps sur un seul ordinateur, chacune avec
@@ -66,7 +66,7 @@ sont en bas, communs aux deux onglets.
 ### Onglet Général
 
 - **Lancer openMouse au démarrage de Windows** : voir « Démarrer » plus haut.
-- **Langue** : « Automatique (langue de Windows) », « Français » ou « English ». Le choix
+- **Langue** : « Automatique (langue de Windows) », « Français », « English » ou « Deutsch ». Le choix
   s'applique tout de suite à la fenêtre, au menu de l'icône et aux messages d'openMouse, et
   il est retenu.
 - **Aide** : ouvre cette page d'aide, dans la langue choisie, sur GitHub.

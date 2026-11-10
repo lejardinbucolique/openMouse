@@ -18,11 +18,13 @@ namespace {
 
 constexpr wchar_t kHelpEn[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/HELP.md";
 constexpr wchar_t kHelpFr[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AIDE.md";
+constexpr wchar_t kHelpDe[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/HILFE.md";
 
 // In the order of the Lang enum.
 const LangInfo kLangs[kLangCount] = {
     { L"en", L"English",  LANG_ENGLISH, false, L'.', kHelpEn },
     { L"fr", L"Français", LANG_FRENCH,  false, L',', kHelpFr },
+    { L"de", L"Deutsch",  LANG_GERMAN,  false, L',', kHelpDe },
 };
 
 std::atomic<int> g_choice{ kLangAuto };
@@ -69,8 +71,29 @@ const wchar_t* const kMsgFr[(int)Msg::Count] = {
     L"Commande système",
 };
 
+const wchar_t* const kMsgDe[(int)Msg::Count] = {
+    L"openMouse – Klicken für die Einstellungen oder zum Beenden (Notfall: Strg+Alt+Umschalt+Q)",
+    L"openMouse ohne Administratorrechte",
+    L"Der Task-Manager und als Administrator gestartete Fenster entziehen sich den Mäusen. Starten Sie openMouse erneut und bestätigen Sie die Berechtigungsabfrage.",
+    L"openMouse – Mäuse: %d%s",
+    L", Tastaturen gesteuert",
+    L"Einstellungen…",
+    L"Protokollordner öffnen",
+    L"openMouse beenden	Strg+Alt+Umschalt+Q",
+    L"Linke Taste",
+    L"Rechte Taste",
+    L"Mittlere Taste",
+    L"Zurück-Taste (4)",
+    L"Vorwärts-Taste (5)",
+    L"Sondertaste (0x%X)",
+    L"Maustaste „%s“",
+    L"Multimedia-Taste",
+    L"Herstellertaste",
+    L"Systembefehl",
+};
+
 // In the order of the Lang enum.
-const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr };
+const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe };
 
 } // namespace
 
