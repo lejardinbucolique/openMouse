@@ -1,6 +1,6 @@
 # openMouse: руководство пользователя
 
-*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Versión en español](AYUDA.md)*
+*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Versión en español](AYUDA.md) · [简体中文版](BANGZHU.md)*
 
 > Этот перевод выполнен с помощью ИИ и не проверялся человеком, владеющим русским языком.
 > Исправления приветствуются: сообщите о них в виде обращения (issue) в
@@ -66,8 +66,8 @@ openMouse даёт каждой подключённой мыши собстве
 ### Вкладка «Общие»
 
 - **Запускать openMouse вместе с Windows**: см. «Запуск» выше.
-- **Язык**: «Автоматически (язык Windows)», «Français», «English», «Deutsch», «Español» или
-  «Русский». Выбор сразу применяется к окну, меню значка и сообщениям openMouse и
+- **Язык**: «Автоматически (язык Windows)», «Français», «English», «Deutsch», «Español», «Русский» или
+  «简体中文». Выбор сразу применяется к окну, меню значка и сообщениям openMouse и
   запоминается.
 - **Справка**: открывает это руководство на GitHub на выбранном языке.
 - **О программе**: авторы со ссылкой на сайт Calepitool.

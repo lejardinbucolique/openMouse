@@ -21,6 +21,7 @@ constexpr wchar_t kHelpFr[] = L"https://github.com/lejardinbucolique/openMouse/b
 constexpr wchar_t kHelpDe[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/HILFE.md";
 constexpr wchar_t kHelpEs[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AYUDA.md";
 constexpr wchar_t kHelpRu[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/SPRAVKA.md";
+constexpr wchar_t kHelpZh[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/BANGZHU.md";
 
 // In the order of the Lang enum.
 const LangInfo kLangs[kLangCount] = {
@@ -29,6 +30,7 @@ const LangInfo kLangs[kLangCount] = {
     { L"de", L"Deutsch",  LANG_GERMAN,  false, L',', kHelpDe },
     { L"es", L"Español",  LANG_SPANISH, false, L',', kHelpEs },
     { L"ru", L"Русский",  LANG_RUSSIAN, false, L',', kHelpRu },
+    { L"zh-CN", L"简体中文", LANG_CHINESE, false, L'.', kHelpZh },
 };
 
 std::atomic<int> g_choice{ kLangAuto };
@@ -138,8 +140,29 @@ const wchar_t* const kMsgRu[(int)Msg::Count] = {
     L"Системная команда",
 };
 
+const wchar_t* const kMsgZh[(int)Msg::Count] = {
+    L"openMouse：点击打开设置或退出（紧急退出：Ctrl+Alt+Shift+Q）",
+    L"openMouse 未以管理员身份运行",
+    L"任务管理器和以管理员身份启动的窗口将不受鼠标控制。请重新启动 openMouse，并在权限提示中选择“是”。",
+    L"openMouse：%d 个鼠标%s",
+    L"，键盘已受控",
+    L"设置…",
+    L"打开日志文件夹",
+    L"退出 openMouse	Ctrl+Alt+Shift+Q",
+    L"左键",
+    L"右键",
+    L"中键",
+    L"后退键 (4)",
+    L"前进键 (5)",
+    L"特殊按键 (0x%X)",
+    L"鼠标按键“%s”",
+    L"多媒体键",
+    L"厂商专用按键",
+    L"系统控制",
+};
+
 // In the order of the Lang enum.
-const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs, kMsgRu };
+const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs, kMsgRu, kMsgZh };
 
 } // namespace
 

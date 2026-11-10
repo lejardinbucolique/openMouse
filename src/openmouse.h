@@ -341,7 +341,7 @@ int  RunSettings(HINSTANCE inst);
 // line in kLangs (lang.cpp), a table in kMsgs (lang.cpp) and one in kStr
 // (settings.cpp), and a user guide for the Help button. No layout code changes;
 // a missing table entry falls back to English.
-enum class Lang { En = 0, Fr, De, Es, Ru, Count };
+enum class Lang { En = 0, Fr, De, Es, Ru, Zh, Count };
 constexpr int kLangCount = (int)Lang::Count;
 
 struct LangInfo {

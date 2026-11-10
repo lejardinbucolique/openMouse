@@ -1,6 +1,6 @@
 # openMouse: guía de uso
 
-*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Русская версия](SPRAVKA.md)*
+*[English version](HELP.md) · [Version française](AIDE.md) · [Deutsche Version](HILFE.md) · [Русская версия](SPRAVKA.md) · [简体中文版](BANGZHU.md)*
 
 > Esta traducción se hizo con la ayuda de una IA y no la ha revisado ninguna persona que
 > hable español. Las correcciones son bienvenidas: infórmelas como incidencia (issue) en el
@@ -67,8 +67,8 @@ abajo, compartidos por las dos pestañas.
 ### Pestaña General
 
 - **Iniciar openMouse con Windows**: vea «Inicio» más arriba.
-- **Idioma**: «Automático (idioma de Windows)», «Français», «English», «Deutsch» o
-  «Español». La elección se aplica al instante a la ventana, al menú del icono y a los
+- **Idioma**: «Automático (idioma de Windows)», «Français», «English», «Deutsch»,
+  «Español», «Русский» o «简体中文». La elección se aplica al instante a la ventana, al menú del icono y a los
   mensajes de openMouse, y se recuerda.
 - **Ayuda**: abre esta guía, en el idioma elegido, en GitHub.
 - **Acerca de**: los créditos, con el enlace al sitio de Calepitool.
