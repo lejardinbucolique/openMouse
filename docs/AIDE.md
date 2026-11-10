@@ -37,8 +37,8 @@ jamais sans pointeur.
 Chaque souris garde sa couleur, même branchée sur un autre port USB.
 
 Si deux flèches sont inversées ou si une souris pilote la mauvaise flèche (cela peut
-arriver avec des récepteurs sans fil), faites un clic droit sur l'icône puis
-**Réidentifier les souris…** et suivez les consignes : bougez une seule souris à la fois.
+arriver avec des récepteurs sans fil), débranchez puis rebranchez le récepteur de la
+souris concernée, et ouvrez **Réglages…** pour voir les souris reconnues.
 
 ## 3. Se servir des deux souris
 
@@ -100,7 +100,7 @@ sait lire n'envoient rien à Windows. La fenêtre vous le dit.
 | Plus de flèche, ou la flèche reste cachée | Appuyez sur **Ctrl + Alt + Maj + Q** : openMouse s'arrête et rend la flèche de Windows. Sinon, lancez `openmouse.exe --restore-cursor`. |
 | Après Ctrl + Alt + Suppr ou un verrouillage de session | C'est normal : Windows reprend la main. Au retour, openMouse se remet en route tout seul. |
 | Une fenêtre d'administrateur ignore les souris | Relancez openMouse en acceptant l'autorisation administrateur. |
-| Une flèche est suivie du mauvais pointeur | **Réidentifier les souris…** dans le menu de l'icône. |
+| Une flèche est suivie du mauvais pointeur | Rebranchez la souris, puis vérifiez dans **Réglages…** les souris reconnues. |
 | Autre souci | **Ouvrir le dossier du journal** dans le menu de l'icône : le fichier `openmouse.log` dit ce qui s'est passé. |
 
 ## 6. Limites connues

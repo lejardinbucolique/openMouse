@@ -33,8 +33,8 @@ hidden, so you are never left without one.
 Each mouse keeps its colour, even on another USB port.
 
 If two pointers are swapped or a mouse drives the wrong pointer (this can happen with
-wireless receivers), right-click the icon, choose **Re-identify devices…** and follow the
-prompts: move one mouse at a time.
+wireless receivers), unplug and replug that mouse's receiver, then open **Settings…** to see
+the recognised mice.
 
 ## 3. Using both mice
 
@@ -91,7 +91,7 @@ nothing to Windows. The window tells you so.
 | No pointer, or the pointer stays hidden | Press **Ctrl + Alt + Shift + Q**: openMouse stops and gives the Windows pointer back. Otherwise run `openmouse.exe --restore-cursor`. |
 | After Ctrl + Alt + Del or locking the session | Normal: Windows takes over. On return openMouse resumes by itself. |
 | An administrator window ignores the mice | Restart openMouse and accept the administrator permission. |
-| A pointer follows the wrong mouse | **Re-identify devices…** in the icon menu. |
+| A pointer follows the wrong mouse | Replug the mouse, then check the recognised mice in **Settings…**. |
 | Anything else | **Open log folder** in the icon menu: `openmouse.log` says what happened. |
 
 ## 6. Known limits

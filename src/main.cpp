@@ -3270,7 +3270,6 @@ void SpawnJanitor() {
 // ---------------------------------------------------------------- tray
 
 constexpr UINT kTrayCmdStop     = 100;
-constexpr UINT kTrayCmdIdentify = 101;
 constexpr UINT kTrayCmdLog      = 102;
 constexpr UINT kTrayCmdAbout    = 103;
 constexpr UINT kTrayCmdSettings = 104;
@@ -3347,7 +3346,6 @@ void TrayMenu(HWND hwnd) {
     AppendMenuW(menu, MF_STRING | MF_DISABLED, kTrayCmdAbout, header);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kTrayCmdSettings, fr ? L"Réglages…" : L"Settings…");
-    AppendMenuW(menu, MF_STRING, kTrayCmdIdentify, fr ? L"Réidentifier les souris…" : L"Re-identify devices…");
     AppendMenuW(menu, MF_STRING, kTrayCmdLog,      fr ? L"Ouvrir le dossier du journal" : L"Open log folder");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kTrayCmdStop,     fr ? L"Arrêter openMouse\tCtrl+Alt+Maj+Q"
@@ -3373,13 +3371,6 @@ void TrayMenu(HWND hwnd) {
         break;
     case kTrayCmdStop:
         LogLine(L"[tray] stop requested");
-        RequestExit();
-        break;
-    case kTrayCmdIdentify:
-        // Identification needs unsuppressed input and an interactive console,
-        // so hand over rather than run alongside: spawn it, then stand down.
-        LogLine(L"[tray] re-identify requested — handing over");
-        RelaunchSelf(L"--identify");
         RequestExit();
         break;
     case kTrayCmdLog: {
@@ -3698,7 +3689,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         om::LogLine(L"  openmouse.exe --autostart=dry-run  print the task that would be created, change nothing");
         om::LogLine(L"");
         om::LogLine(L"  Panic key while running: Ctrl+Alt+Shift+Q");
-        om::LogLine(L"  Tray icon: click for settings, to stop, re-identify, or open the log folder");
+        om::LogLine(L"  Tray icon: click for settings, to stop, or open the log folder");
         // %% — this string goes through a printf-style formatter, where a bare
         // %A is a hex-float specifier and eats the path.
         om::LogLine(L"  Log file: %%APPDATA%%\\openMouse\\openmouse.log");

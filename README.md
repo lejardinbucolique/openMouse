@@ -56,7 +56,7 @@ until you run `--probe` and `--probe-echo` there.
   held off so the drag cannot be broken or hijacked; their pointers keep moving freely.
 - Mouse back/forward side buttons work per seat.
 - Runs from the system tray. Click the icon to open the settings window, stop,
-  re-identify devices, or open the log folder.
+  or open the log folder.
 - A settings window sets each seat's speed and acceleration with sliders, applied at once
   while the engine runs, without editing any file.
 - Any button of a mouse can be learned, even beyond the five Windows maps and without the
