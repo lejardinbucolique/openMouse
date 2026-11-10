@@ -1,7 +1,12 @@
 // openMouse — raw input device enumeration
 // SPDX-License-Identifier: MIT
 #include "openmouse.h"
+#include <hidsdi.h>
 #include <algorithm>
+
+#ifdef _MSC_VER
+#pragma comment(lib, "hid.lib")
+#endif
 
 namespace om {
 
@@ -121,6 +126,160 @@ bool IsAutoSeatCandidate(const std::wstring& path) {
 
 bool IsIntegratedPointer(const std::wstring& path) {
     return !IsAutoSeatCandidate(path);
+}
+
+// ---------------------------------------------------------------- make of a mouse
+
+namespace {
+
+// Makers of mice by USB vendor id. Source: the USB-IF vendor list as kept in
+// the usb.ids database (http://www.linux-usb.org/usb.ids, also
+// https://usb-ids.gowdy.us/). Only makers who sell mice under their own name
+// are listed: the chip makers and contract makers whose id sits inside
+// countless unbranded mice (PixArt 093A, Sunplus 1BCF, Holtek 04D9, Sino
+// Wealth 258A, Primax 0461, Chicony 04F2...) are left out on purpose, they
+// say nothing about the mouse in the hand.
+struct Maker { USHORT vid; const wchar_t* name; };
+const Maker kMakers[] = {
+    { 0x046D, L"Logitech" },   { 0x045E, L"Microsoft" },  { 0x1532, L"Razer" },
+    { 0x1038, L"SteelSeries" },{ 0x1B1C, L"Corsair" },    { 0x0B05, L"ASUS" },
+    { 0x413C, L"Dell" },       { 0x03F0, L"HP" },         { 0x17EF, L"Lenovo" },
+    { 0x05AC, L"Apple" },      { 0x0458, L"Genius" },     { 0x09DA, L"A4Tech" },
+    { 0x046A, L"Cherry" },     { 0x056E, L"Elecom" },     { 0x24AE, L"Rapoo" },
+    { 0x1E7D, L"Roccat" },     { 0x2516, L"Cooler Master" },{ 0x3367, L"Endgame Gear" },
+    { 0x0951, L"HyperX" },     { 0x04B3, L"IBM" },
+};
+
+std::wstring Lower2(std::wstring s) {
+    for (auto& c : s) c = (wchar_t)towlower(c);
+    return s;
+}
+
+// The vendor id in an interface path: "vid_046d" (USB) or "vid&0002046d"
+// (Bluetooth, whose first four digits say who assigned the id: 0002 is USB-IF).
+// 0 when there is none.
+USHORT VendorOf(const std::wstring& path) {
+    const std::wstring p = Lower2(path);
+    auto hex = [&](size_t at, size_t n) -> long {
+        if (at + n > p.size()) return -1;
+        long v = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const wchar_t c = p[at + i];
+            if (c >= L'0' && c <= L'9') v = v * 16 + (c - L'0');
+            else if (c >= L'a' && c <= L'f') v = v * 16 + (c - L'a' + 10);
+            else return -1;
+        }
+        return v;
+    };
+    size_t at = p.find(L"vid_");
+    if (at != std::wstring::npos) { const long v = hex(at + 4, 4); return v > 0 ? (USHORT)v : 0; }
+    at = p.find(L"vid&");
+    if (at != std::wstring::npos && hex(at + 4, 4) == 2) { const long v = hex(at + 8, 4); return v > 0 ? (USHORT)v : 0; }
+    return 0;
+}
+
+// A name that tells nothing about who made the mouse: only words like "HID",
+// "USB", "mouse", "standard", in English or French, or numbers.
+bool IsGenericName(const std::wstring& name) {
+    static const wchar_t* const kGeneric[] = {
+        L"hid", L"compliant", L"mouse", L"mice", L"usb", L"input", L"device", L"devices",
+        L"optical", L"laser", L"wireless", L"bluetooth", L"receiver", L"dongle", L"standard",
+        L"generic", L"unknown", L"system", L"types", L"type", L"pointing", L"compatible",
+        L"gaming", L"game", L"office", L"composite", L"ps", L"2", L"the", L"and", L"with",
+        L"souris", L"peripherique", L"périphérique", L"conforme", L"entree", L"entrée", L"de",
+        L"pointage", L"sans", L"fil", L"optique", L"standards", L"système", L"systeme",
+    };
+    std::wstring word;
+    auto flush = [&]() -> bool {
+        if (word.empty()) return true;
+        const std::wstring w = Lower2(word);
+        word.clear();
+        bool numeric = true;
+        for (wchar_t c : w) if (c < L'0' || c > L'9') { numeric = false; break; }
+        if (numeric) return true;
+        // "2.4g", "24ghz", "5g"
+        if (w.size() >= 2 && w.back() == L'g' && w.find_first_not_of(L"0123456789g") == std::wstring::npos) return true;
+        if (w.size() >= 4 && w.compare(w.size() - 3, 3, L"ghz") == 0) return true;
+        for (const wchar_t* g : kGeneric) if (w == g) return true;
+        return false;
+    };
+    for (wchar_t c : name) {
+        if (iswalnum(c)) { word.push_back(c); continue; }
+        if (!flush()) return false;
+    }
+    if (!flush()) return false;
+    return true;   // every word was generic, or there was none
+}
+
+// Trims, drops control characters and the legal form ("Logitech, Inc." ->
+// "Logitech"), and bounds the length: the text is shown in a title.
+std::wstring CleanMaker(std::wstring s) {
+    std::wstring out;
+    for (wchar_t c : s) out.push_back(c < 32 ? L' ' : c);
+    auto trim = [](std::wstring& t) {
+        const size_t a = t.find_first_not_of(L" ,.;");
+        if (a == std::wstring::npos) { t.clear(); return; }
+        t = t.substr(a, t.find_last_not_of(L" ,.;") - a + 1);
+    };
+    trim(out);
+    static const wchar_t* const kLegal[] = { L" inc", L" corp", L" corporation", L" co", L" ltd",
+                                             L" gmbh", L" aps", L" llc", L" ag", L" sa", L" s.a", L" b.v" };
+    for (bool again = true; again; ) {
+        again = false;
+        const std::wstring low = Lower2(out);
+        for (const wchar_t* l : kLegal) {
+            const size_t n = wcslen(l);
+            if (low.size() > n && low.compare(low.size() - n, n, l) == 0) {
+                out.resize(out.size() - n);
+                trim(out);
+                again = true;
+                break;
+            }
+        }
+    }
+    if (out.size() > 32) { out.resize(32); trim(out); }
+    return out;
+}
+
+// A string the device reports about itself. Opening an interface with no
+// access rights at all is enough to ask, and moves nothing.
+struct HidStrings { std::wstring maker, product; };
+
+HidStrings ReadHidStrings(const std::wstring& path) {
+    HidStrings r;
+    // Only what raw input listed as a HID interface is opened, never another
+    // kind of path that the configuration file might carry.
+    if (path.size() < 8 || _wcsnicmp(path.c_str(), L"\\\\?\\HID#", 8) != 0) return r;
+    HANDLE h = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return r;
+    wchar_t buf[128] = {};
+    if (HidD_GetManufacturerString(h, buf, sizeof(buf) - sizeof(wchar_t))) r.maker = buf;
+    wchar_t buf2[128] = {};
+    if (HidD_GetProductString(h, buf2, sizeof(buf2) - sizeof(wchar_t))) r.product = buf2;
+    CloseHandle(h);
+    return r;
+}
+
+} // namespace
+
+std::wstring MouseBrand(const std::wstring& path, bool plugged) {
+    if (plugged) {
+        const HidStrings s = ReadHidStrings(path);
+        const std::wstring maker = CleanMaker(s.maker);
+        if (!maker.empty() && !IsGenericName(maker)) return maker;
+    }
+    if (const USHORT vid = VendorOf(path))
+        for (const Maker& m : kMakers)
+            if (m.vid == vid) return m.name;
+    if (plugged) {
+        const HidStrings s = ReadHidStrings(path);
+        const std::wstring product = CleanMaker(s.product);
+        if (!product.empty() && !IsGenericName(product)) return product;
+    }
+    const std::wstring win = CleanMaker(FriendlyNameFromPath(path));
+    if (!win.empty() && !IsGenericName(win)) return win;
+    return L"";
 }
 
 std::vector<DeviceInfo> EnumerateDevices() {

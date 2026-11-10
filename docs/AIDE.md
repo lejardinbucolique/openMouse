@@ -61,6 +61,19 @@ Clic sur l'icône près de l'horloge, puis **Réglages…**. Une zone par souris
 changement s'applique tout de suite et s'enregistre ; **Annuler mes changements** remet
 les valeurs d'ouverture de la fenêtre.
 
+### Reconnaître et mettre de côté une souris
+
+Le titre de chaque zone donne la marque de la souris (« Souris Logitech »), lue sur la
+souris elle-même ou, à défaut, d'après son fabricant. Quand la marque ne se lit pas, le
+titre reste « Souris » suivi d'un numéro ; deux souris de même marque portent en plus
+leur numéro.
+
+La case **Désactiver**, à droite du titre, met la souris de côté sans la débrancher : sa
+flèche disparaît et plus rien de ce qu'elle fait n'est pris en compte, tout de suite.
+Décochée, elle revient là où elle s'était arrêtée, avec sa couleur et sa vitesse. On ne
+peut pas désactiver la dernière souris active (le pavé tactile compte quand il est
+actif) : openMouse le refuse, pour que vous ne restiez jamais sans pointeur.
+
 ### Apparence de la flèche
 
 - **Couleur** : dix couleurs au choix, pour reconnaître sa flèche d'un coup d'œil.

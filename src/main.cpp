@@ -59,6 +59,9 @@ HINSTANCE                 g_inst = nullptr;  // for the overlays created at run 
 // A seat whose mouse is unplugged hides its arrow, kept for its return.
 bool                      g_seatReady[kMaxSeats]   = {};
 bool                      g_seatPresent[kMaxSeats] = {};
+// Plugged in, whether or not the user set it aside in the settings: the
+// settings window marks only the unplugged ones.
+bool                      g_seatPlugged[kMaxSeats] = {};
 bool                      g_captureActive = false;
 
 std::atomic<uint64_t>     g_heartbeat{0};
@@ -1878,16 +1881,21 @@ int OwnerSeatOf(const std::wstring& path) {
 void SeatTouchpad(const std::vector<DeviceInfo>& devices,
                   std::map<std::wstring, const wchar_t*>& deadWhy,
                   std::set<std::wstring>& cutOff) {
-    std::set<int> externalSeats;
+    // The mice set aside still count for the automatic mode (the touchpad does
+    // not spring back because one of two mice was put away), but not as a
+    // pointer: with none left that works, the touchpad is kept.
+    std::set<int> externalSeats, workingSeats;
     for (const auto& d : devices) {
         if (d.type != RIM_TYPEMOUSE || IsIntegratedPointer(d.path)) continue;
         const auto it = g_cfg.mouseBinding.find(d.path);
-        if (it != g_cfg.mouseBinding.end()) externalSeats.insert(it->second);
+        if (it == g_cfg.mouseBinding.end()) continue;
+        externalSeats.insert(it->second);
+        if (!g_cfg.disabledMice.count(d.path)) workingSeats.insert(it->second);
     }
     const size_t externals = externalSeats.size();
     const bool active = g_cfg.touchpad == Config::Touchpad::On ||
                         (g_cfg.touchpad == Config::Touchpad::Auto && externals <= 1) ||
-                        externals == 0;
+                        workingSeats.empty();
 
     static int lastState = -1;   // -1 unknown, else 0 cut off / 1 seated; logged on change only
     std::set<std::wstring> seen;
@@ -1964,6 +1972,7 @@ void ApplyBindings() {
     const bool haveMouseCfg = !g_cfg.mouseBinding.empty();
     const bool haveKbdCfg   = !g_cfg.keyboardBinding.empty();
     int autoMouse = 0, autoKeyboard = 0;
+    std::vector<std::pair<HANDLE, int>> setAside;   // mice the user disabled: handle, seat
 
     // A mouse moved to another USB port, or renumbered by a reboot, comes
     // back with a new instance id in its path and would no longer match.
@@ -1974,6 +1983,7 @@ void ApplyBindings() {
     for (const auto& d : devices)
         if (d.type == RIM_TYPEMOUSE && g_cfg.mouseBinding.count(d.path)) claimed.insert(d.path);
     std::map<std::wstring, int> moved;   // new path -> seat, taken over from a stale entry
+    std::vector<std::wstring> movedOff;  // the new paths of mice that were set aside
     for (const auto& d : devices) {
         if (d.type != RIM_TYPEMOUSE || g_cfg.mouseBinding.count(d.path)) continue;
         const std::wstring key = StableKey(d.path);
@@ -1981,10 +1991,12 @@ void ApplyBindings() {
         for (auto it = g_cfg.mouseBinding.begin(); it != g_cfg.mouseBinding.end(); ++it) {
             if (claimed.count(it->first) || StableKey(it->first) != key) continue;
             moved[d.path] = it->second;
+            if (g_cfg.disabledMice.erase(it->first)) movedOff.push_back(d.path);
             g_cfg.mouseBinding.erase(it);
             break;
         }
     }
+    for (const auto& path : movedOff) g_cfg.disabledMice.insert(path);
     for (const auto& kv : moved) {
         g_cfg.mouseBinding[kv.first] = kv.second;
         LogLine(L"[rebind] mouse seat %d : chemin mis à jour  %s", kv.second, kv.first.c_str());
@@ -2003,8 +2015,16 @@ void ApplyBindings() {
         if (d.type == RIM_TYPEMOUSE) {
             auto it = g_cfg.mouseBinding.find(d.path);
             if (it != g_cfg.mouseBinding.end() && !cutOff.count(d.path)) {
-                g_mouseSeat[d.handle] = it->second;
-                LogLine(L"[bind] mouse    seat %d  %s", it->second, d.friendlyName.c_str());
+                if (g_cfg.disabledMice.count(d.path) && !IsIntegratedPointer(d.path)) {
+                    // Set aside in the settings: kept in its seat, but dead.
+                    g_deadMice.insert(d.handle);
+                    setAside.push_back({ d.handle, it->second });
+                    LogLine(L"[off]  mouse    seat %d  %s  (disabled in the settings)",
+                            it->second, d.friendlyName.c_str());
+                } else {
+                    g_mouseSeat[d.handle] = it->second;
+                    LogLine(L"[bind] mouse    seat %d  %s", it->second, d.friendlyName.c_str());
+                }
             } else if (haveMouseCfg) {
                 // Measured bindings exist, so an unmatched interface is a
                 // ghost collection, an integrated device or a mouse past the
@@ -2042,9 +2062,26 @@ void ApplyBindings() {
     if (!haveMouseCfg)
         LogLine(L"[warn] no measured bindings — run openmouse.exe --identify");
 
+    // Never without a pointer: if every mouse still plugged in was set aside
+    // (the ones that worked were unplugged, or the ini was edited by hand), they
+    // work again for this run. The file is not touched, so they are set aside
+    // again as soon as another pointer is there.
+    if (g_mouseSeat.empty() && !setAside.empty()) {
+        for (const auto& a : setAside) {
+            g_deadMice.erase(a.first);
+            g_mouseSeat[a.first] = a.second;
+        }
+        LogLine(L"[off]  no other pointer left: the %u disabled mice work again for now",
+                (unsigned)setAside.size());
+        setAside.clear();
+    }
+
     for (bool& p : g_seatPresent) p = false;
+    for (bool& p : g_seatPlugged) p = false;
     for (const auto& kv : g_mouseSeat)
-        if (kv.second >= 0 && kv.second < kMaxSeats) g_seatPresent[kv.second] = true;
+        if (kv.second >= 0 && kv.second < kMaxSeats) g_seatPresent[kv.second] = g_seatPlugged[kv.second] = true;
+    for (const auto& a : setAside)
+        if (a.second >= 0 && a.second < kMaxSeats) g_seatPlugged[a.second] = true;
 
     // The keyboard and HID interfaces that belong to a seat's mouse: same
     // hardware id as a mouse bound to the seat. Two mice of one model share it,
@@ -2055,7 +2092,7 @@ void ApplyBindings() {
     g_hidPage.clear();
     auto own = [&](const DeviceInfo& d) {
         const int seat = OwnerSeatOf(d.path);
-        if (seat < 0) return;
+        if (seat < 0 || seat >= kMaxSeats || !g_seatPresent[seat]) return;   // a disabled mouse's buttons too
         g_ownerSeat[d.handle] = seat;
         if (d.type == RIM_TYPEHID) g_hidPage[d.handle] = d.page;
     };
@@ -2071,7 +2108,7 @@ void NotifySeats() {
     if (!w) return;
     WPARAM mask = 0;
     for (int i = 0; i < kMaxSeats; ++i)
-        if (g_seatPresent[i]) mask |= (WPARAM)1 << i;
+        if (g_seatPlugged[i]) mask |= (WPARAM)1 << i;
     PostMessageW(w, kSeatsMsg, mask, 0);
 }
 
@@ -2109,8 +2146,10 @@ void ReloadSettings() {
     }
     g_cfg.sensitivity = fresh.sensitivity;
     g_cfg.accel       = fresh.accel;
-    const bool padChanged = g_cfg.touchpad != fresh.touchpad;
+    const bool padChanged = g_cfg.touchpad != fresh.touchpad ||
+                            g_cfg.disabledMice != fresh.disabledMice;
     g_cfg.touchpad    = fresh.touchpad;
+    g_cfg.disabledMice = fresh.disabledMice;
     g_cfg.screen      = fresh.screen;
     // Colour and set of pointers: redrawn at once.
     g_cfg.cursorStyle = fresh.cursorStyle;
@@ -2134,7 +2173,7 @@ void ReloadSettings() {
         else
             LogLine(L"[settings] seat %d sensitivity %.2f", i, k);
     }
-    if (padChanged) Rescan();   // the touchpad is seated or cut off at once
+    if (padChanged) Rescan();   // the touchpad is seated or cut off, a mouse set aside or brought back, at once
 }
 
 // Peak of each step within one event, and a per-step breakdown of any event
@@ -2523,6 +2562,10 @@ int RunList() {
         LogLine(L"  %s  %s", d.type == RIM_TYPEMOUSE ? L"[mouse]   " : L"[keyboard]",
                 d.friendlyName.c_str());
         LogLine(L"      %s", d.path.c_str());
+        if (d.type == RIM_TYPEMOUSE && !IsIntegratedPointer(d.path)) {
+            const std::wstring make = MouseBrand(d.path, true);
+            LogLine(L"      make: %s", make.empty() ? L"(unknown)" : make.c_str());
+        }
         if (d.type == RIM_TYPEKEYBOARD && OwnerSeatOf(d.path) >= 0)
             LogLine(L"      interface of the mouse of seat %d (its buttons can be learned)", OwnerSeatOf(d.path));
     }

@@ -59,6 +59,9 @@ until you run `--probe` and `--probe-echo` there.
   or open the log folder.
 - A settings window sets each seat's speed and acceleration with sliders, applied at once
   while the engine runs, without editing any file.
+- Each mouse can be set aside from the settings window with its **Disable** box, without
+  unplugging it, and its section is titled with its make ("Logitech mouse"); see
+  [Setting a mouse aside](#setting-a-mouse-aside).
 - Any button of a mouse can be learned, even beyond the five Windows maps and without the
   manufacturer's driver, and given an action played at that mouse's own pointer; see
   [Learned buttons](#learned-buttons).
@@ -259,6 +262,37 @@ device in `[mouse]` by hand to seat it anyway. On a first run with no bindings a
 devices are auto-assigned round-robin so nothing is dead out of the box, but run
 `--identify` before trusting the assignment.
 
+### Setting a mouse aside
+
+In the settings window, each mouse (not the touchpad, which has its own mode) has a
+**Disable** box beside its title. Ticked, the mouse stays bound to its seat, with its colour,
+speed, screen and learned buttons, but the engine ignores its input and hides its arrow; the
+change applies at once, like the touchpad mode. Unticked, it comes back where it stopped. The
+last working pointer cannot be set aside (the touchpad counts while it is seated, a mouse that
+is unplugged does not): the window refuses, and the engine applies the same rule on its own,
+so if the mice that worked are unplugged while others are set aside, those work again until
+another pointer is back (the file is not changed). Setting a mouse aside does not bring the
+touchpad back in `auto` mode, but with no working mouse left the touchpad is kept.
+
+The state is the `[disabled]` section of the ini, keyed by the same interface path as
+`[mouse]` and following the mouse to another USB port; entries that match no bound mouse are
+dropped at the next write, and at most 64 are read.
+
+```ini
+[disabled]
+\\?\HID#VID_046D&PID_C534&MI_01&Col01#7&393c14a9&0&0000#{...}=1
+```
+
+The title of each section shows the make of the mouse. It is read, in this order, from the
+manufacturer string the mouse reports itself (`HidD_GetManufacturerString`, only while it is
+plugged in), then from the USB vendor id in the path against a table of the makers that sell
+mice under their own name (from the USB-IF list as kept in
+[usb.ids](http://www.linux-usb.org/usb.ids); chip and contract makers whose id sits in many
+unbranded mice are left out), then from the product string, then from the name Windows gives
+it. A generic name ("HID-compliant mouse", "USB Optical Mouse") is never taken for a make:
+the title then stays "Mouse n". Two mice of the same make carry their seat number too.
+`openmouse.exe --list` prints the make it finds for each mouse.
+
 ### Learned buttons
 
 A mouse often has more to say than the five buttons Windows maps: a button that sends
@@ -434,10 +468,10 @@ is drawn as a layered, click-through, topmost window.
 | File | Responsibility |
 |---|---|
 | `src/main.cpp` | Raw input capture, routing, injection, suppression gate, watchdog, tray, janitor, command modes |
-| `src/devices.cpp` | Device enumeration (mice, keyboards, HID collections) and stable identity via the registry Enum key |
+| `src/devices.cpp` | Device enumeration (mice, keyboards, HID collections), stable identity via the registry Enum key, make of a mouse |
 | `src/overlay.cpp` | Per-seat pointer rendering derived from the real system cursor |
 | `src/config.cpp` | Configuration load and save (seat values, learned buttons), logging |
-| `src/settings.cpp` | Settings window (`--settings`): per-seat speed, acceleration, screen, learned buttons |
+| `src/settings.cpp` | Settings window (`--settings`): per-seat speed, acceleration, screen, learned buttons, mouse set aside |
 
 ## Findings
 
@@ -490,8 +524,8 @@ same mitigation.
 - Seat counts above two are supported in code but only lightly tested on real hardware.
 - A new mouse that exposes several mouse collections can only be told from a ghost by its
   suffix; if the wrong one is seated, list the right interface in `[mouse]`.
-- The settings window covers colour, pointer set, speed, acceleration, screen and learned
-  buttons; bindings are still edited in the file.
+- The settings window covers colour, pointer set, speed, acceleration, screen, learned
+  buttons and setting a mouse aside; bindings are still edited in the file.
 
 ## Building
 

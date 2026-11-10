@@ -55,7 +55,8 @@ enum Str {
     sStyle0, sStyle1, sStyle2, sStyle3, sStyle4,
     sCol0, sCol1, sCol2, sCol3, sCol4, sCol5, sCol6, sCol7, sCol8, sCol9,
     sFixed, sExplainFixed, sExplainAccel, sSeatAbsent, sAbout,
-    sTouchpad, sPadCut, sPadMode, sPadAuto, sPadOn, sPadOff, sStrCount
+    sTouchpad, sPadCut, sPadMode, sPadAuto, sPadOn, sPadOff,
+    sDisable, sBrandOne, sBrandMany, sLastActive, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -133,6 +134,10 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Automatic (cut off from two mice on)",
     L"Always on",
     L"Cut off (kept when no other mouse)",
+    L"Disable",
+    L"%s mouse",
+    L"%s mouse (%d)",
+    L"Cannot disable the last working mouse: one pointer has to stay.",
 };
 
 const wchar_t* const kStrFr[sStrCount] = {
@@ -210,6 +215,10 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Automatique (coupé dès deux souris)",
     L"Toujours actif",
     L"Coupé (gardé s'il n'y a pas d'autre souris)",
+    L"Désactiver",
+    L"Souris %s",
+    L"Souris %s (%d)",
+    L"Impossible de désactiver la dernière souris active : il faut garder un pointeur.",
 };
 
 // The colours offered for a mouse; the first one is the default of seat 0.
@@ -236,7 +245,7 @@ const Range kRange[fFieldCount] = {
 };
 
 // Control ids: one block of 32 per seat.
-constexpr int kPerSeat   = 32;
+constexpr int kPerSeat   = 40;
 constexpr int kIdBase    = 1000;
 constexpr int kIdUndo    = 900;
 constexpr int kIdClose   = 901;
@@ -246,7 +255,7 @@ constexpr wchar_t kSiteUrl[] = L"https://calepitool.fr/";
 enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
                cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget,
                cColorLabel = 23, cColor, cStyleLabel, cStyle, cPreview, cFixed, cExplain,
-               cPadLabel, cPad };
+               cPadLabel, cPad, cOff };
 int CtlId(int seat, int ctl) { return kIdBase + seat * kPerSeat + ctl; }
 
 constexpr UINT_PTR kTimerApply = 1, kTimerLearn = 2, kTimerAutostart = 3;
@@ -262,6 +271,7 @@ struct SeatUi {
          win = nullptr, forget = nullptr;
     HWND colorLabel = nullptr, color = nullptr, styleLabel = nullptr, style = nullptr, preview = nullptr;
     HWND padLabel = nullptr, pad = nullptr;   // the touchpad mode, shown in its section only
+    HWND off = nullptr;                       // "Disable", beside the title; not for the touchpad
     RECT header{};   // swatch and title, painted by the panel (content coordinates)
 };
 
@@ -294,6 +304,10 @@ struct State {
     int     capturing = -1;                      // seat whose shortcut is being typed, or -1
     UINT    present = ~0u;                       // seats whose mouse is plugged in (bit mask), as the engine said
     int     padSeat = -1;                        // the seat of the laptop touchpad, or -1 without one
+    int     offW = 0;                            // width of the "Disable" box, from its text
+    bool    off[kMaxSeats] = {};                 // mouse set aside ("Disable" ticked)
+    bool    offOpened[kMaxSeats] = {};           // the same when the window opened, for "undo"
+    std::wstring brand[kMaxSeats];               // make of each seat's mouse, "" when unknown
 } g;
 
 int Px(int dip) { return MulDiv(dip, (int)g.dpi, 96); }
@@ -356,6 +370,46 @@ int TouchpadSeat(const Config& c) {
     return -1;
 }
 
+// A seat is set aside when the mouse bound to it is in the [disabled] list.
+bool SeatSetAside(const Config& c, int seat) {
+    for (const auto& kv : c.mouseBinding)
+        if (kv.second == seat && !IsIntegratedPointer(kv.first) && c.disabledMice.count(kv.first)) return true;
+    return false;
+}
+
+// The make of each seat's mouse, read from the devices plugged in now (and from
+// the vendor id alone for the unplugged ones). Done when the window opens and
+// when the engine reports a change of devices, never while painting.
+void RefreshBrands(const Config& c) {
+    std::set<std::wstring> plugged;
+    for (const auto& d : EnumerateDevices())
+        if (d.type == RIM_TYPEMOUSE) plugged.insert(d.path);
+    for (int i = 0; i < kMaxSeats; ++i) g.brand[i].clear();
+    for (int i = 0; i < g.seats && i < kMaxSeats; ++i) {
+        if (i == g.padSeat) continue;
+        for (const auto& kv : c.mouseBinding) {
+            if (kv.second != i || IsIntegratedPointer(kv.first)) continue;
+            g.brand[i] = MouseBrand(kv.first, plugged.count(kv.first) != 0);
+            if (!g.brand[i].empty()) break;
+        }
+    }
+}
+
+// What the title of a seat's section says: the make of the mouse, with the seat
+// number when another mouse has the same make, "Mouse n" when the make is unknown.
+std::wstring SeatTitle(int i) {
+    wchar_t title[160];
+    if (i == g.padSeat) return S(sTouchpad);
+    const std::wstring& b = g.brand[i];
+    if (b.empty()) { swprintf(title, 160, S(sSeat), i + 1); return title; }
+    bool twin = false;
+    for (int j = 0; j < g.seats && j < kMaxSeats; ++j)
+        if (j != i && j != g.padSeat && _wcsicmp(g.brand[j].c_str(), b.c_str()) == 0) twin = true;
+    if (twin) swprintf(title, 160, S(sBrandMany), b.c_str(), i + 1);
+    else      swprintf(title, 160, S(sBrandOne), b.c_str());
+    return title;
+}
+
 // ---------------------------------------------------------------- apply
 
 void SetStatus(const std::wstring& text) { SetWindowTextW(g.status, text.c_str()); }
@@ -375,6 +429,12 @@ void Apply() {
         disk.buttons[i]     = g.cur.buttons[i];
     }
     disk.touchpad = g.cur.touchpad;
+    for (const auto& kv : disk.mouseBinding) {
+        if (kv.second < 0 || kv.second >= g.seats || IsIntegratedPointer(kv.first)) continue;
+        if (!g.off[kv.second])                     disk.disabledMice.erase(kv.first);
+        else if (disk.disabledMice.count(kv.first) ||
+                 disk.disabledMice.size() < Config::kMaxDisabled) disk.disabledMice.insert(kv.first);
+    }
     if (!disk.Save(g.path)) {
         wchar_t buf[MAX_PATH + 64];
         swprintf(buf, MAX_PATH + 64, S(sSaveFailed), g.path.c_str());
@@ -824,6 +884,9 @@ void ShowSeat(int seat) {
     SendMessageW(u.screen, CB_SETCURSEL, sel, 0);
 
     const bool pad = seat == g.padSeat;
+    ShowWindow(u.off, pad ? SW_HIDE : SW_SHOWNA);
+    SendMessageW(u.off, BM_SETCHECK, g.off[seat] ? BST_CHECKED : BST_UNCHECKED, 0);
+    EnableWindow(u.learn, !g.off[seat]);   // a mouse set aside sends nothing to listen to
     ShowWindow(u.padLabel, pad ? SW_SHOWNA : SW_HIDE);
     ShowWindow(u.pad, pad ? SW_SHOWNA : SW_HIDE);
     if (pad) SendMessageW(u.pad, CB_SETCURSEL, (WPARAM)g.cur.touchpad, 0);
@@ -837,6 +900,29 @@ void OnPadMode(int seat) {
     const int sel = (int)SendMessageW(g.ui[seat].pad, CB_GETCURSEL, 0, 0);
     if (sel < 0 || sel > 2) return;
     g.cur.touchpad = (Config::Touchpad)sel;
+    Apply();
+}
+
+// "Disable": the mouse stays in its seat, colour and speed kept, but its input is
+// ignored; the engine applies it at once. The last pointer that works cannot be
+// set aside, so that the computer is never left without one (the touchpad counts
+// when it is in use; a mouse that is unplugged does not).
+void OnDisable(int seat) {
+    const bool want = SendMessageW(g.ui[seat].off, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (want == g.off[seat]) return;
+    if (want) {
+        bool other = false;
+        for (int j = 0; j < g.seats && j < kMaxSeats; ++j)
+            if (j != seat && !g.off[j] && (g.present & (1u << j))) other = true;
+        if (!other) {
+            SendMessageW(g.ui[seat].off, BM_SETCHECK, BST_UNCHECKED, 0);
+            SetStatus(S(sLastActive));
+            return;
+        }
+    }
+    g.off[seat] = want;
+    ShowSeat(seat);
+    InvalidateRect(g.panel, nullptr, TRUE);   // the title greys out
     Apply();
 }
 
@@ -867,6 +953,7 @@ void CreateSeatControls(int i) {
     u.padLabel = Make(p, L"STATIC", S(sPadMode), SS_LEFT, CtlId(i, cPadLabel));
     u.pad = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cPad));
     for (Str k : { sPadAuto, sPadOn, sPadOff }) SendMessageW(u.pad, CB_ADDSTRING, 0, (LPARAM)S(k));
+    u.off = Make(p, L"BUTTON", S(sDisable), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cOff));
     u.colorLabel = Make(p, L"STATIC", S(sColorLabel), SS_LEFT, CtlId(i, cColorLabel));
     u.color = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cColor));
     u.styleLabel = Make(p, L"STATIC", S(sStyleLabel), SS_LEFT, CtlId(i, cStyleLabel));
@@ -974,6 +1061,7 @@ int LayoutSeat(int i, int x, int y) {
         SetWindowPos(h, nullptr, px, py, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
     };
     u.header = { x, y, x + colW, y + Px(24) };
+    place(u.off, x + colW - g.offW, y + Px(1), g.offW, Px(22));
     y += Px(34);
     if (i == g.padSeat) {
         place(u.padLabel, x, y, colW, Px(18));
@@ -1053,6 +1141,16 @@ SIZE Layout(HWND hwnd) {
     g.bold = CreateFontW(-MulDiv(11, (int)g.dpi, 72), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
                          0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     EnumChildWindows(hwnd, SetFontProc, (LPARAM)g.font);
+    {
+        // The "Disable" box is as wide as its text: the title beside it gets the rest.
+        HDC dc = GetDC(hwnd);
+        HGDIOBJ old = SelectObject(dc, g.font);
+        SIZE sz{};
+        GetTextExtentPoint32W(dc, S(sDisable), (int)wcslen(S(sDisable)), &sz);
+        SelectObject(dc, old);
+        ReleaseDC(hwnd, dc);
+        g.offW = sz.cx + Px(24);
+    }
     auto place = [](HWND h, int x, int y, int w, int hgt) {
         SetWindowPos(h, nullptr, x, y, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
     };
@@ -1161,15 +1259,14 @@ void PaintPanel(HWND hwnd) {
         FillRect(dc, &swatch, b);
         DeleteObject(b);
         FrameRect(dc, &swatch, GetSysColorBrush(COLOR_GRAYTEXT));
-        wchar_t title[64];
         const bool pad = i == g.padSeat;
-        if (pad) wcscpy_s(title, S(sTouchpad));
-        else     swprintf(title, 64, S(sSeat), i + 1);
+        std::wstring title = SeatTitle(i);
         const bool absent = !(g.present & (1u << i));
-        if (absent) wcscat_s(title, S(pad ? sPadCut : sSeatAbsent));
-        RECT tr{ h.left + sw + Px(8), h.top, h.right, h.bottom };
-        SetTextColor(dc, GetSysColor(absent ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
-        DrawTextW(dc, title, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (absent) title += S(pad ? sPadCut : sSeatAbsent);
+        // The "Disable" box sits at the right end of the row: the title gives it room.
+        RECT tr{ h.left + sw + Px(8), h.top, pad ? h.right : h.right - g.offW - Px(4), h.bottom };
+        SetTextColor(dc, GetSysColor(absent || g.off[i] ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+        DrawTextW(dc, title.c_str(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         RECT line{ h.left, h.bottom + Px(4), h.right, h.bottom + Px(5) };
         FillRect(dc, &line, GetSysColorBrush(COLOR_3DLIGHT));
     }
@@ -1337,12 +1434,17 @@ void OnSeats(HWND hwnd, UINT present) {
                 c->seatColors[i]  = disk.seatColors[i];
                 c->cursorStyle[i] = disk.cursorStyle[i];
             }
+            g.off[i] = g.offOpened[i] = SeatSetAside(disk, i);
             CreateSeatControls(i);
         }
+        RefreshBrands(disk);
         FitWindow(hwnd);
     } else if (padMoved) {
         for (int i = 0; i < g.seats; ++i) ShowSeat(i);
+        RefreshBrands(disk);
         FitWindow(hwnd);
+    } else {
+        RefreshBrands(disk);   // a mouse plugged in or out: its make can now be read, or not
     }
     InvalidateRect(g.panel, nullptr, TRUE);
 }
@@ -1371,6 +1473,7 @@ void OnCommand(HWND hwnd, int id) {
             g.cur.cursorStyle[i] = g.opened.cursorStyle[i];
             g.cur.buttons[i]     = g.opened.buttons[i];
             g.cur.touchpad       = g.opened.touchpad;
+            g.off[i]             = g.offOpened[i];
             g.sel[i] = 0;
             g.note[i].clear();
             ShowSeat(i);
@@ -1380,7 +1483,9 @@ void OnCommand(HWND hwnd, int id) {
     }
     int seat, ctl;
     if (!SeatOf(id, seat, ctl)) return;
-    if (ctl == cAccel || ctl == cFixed) {
+    if (ctl == cOff) {
+        OnDisable(seat);
+    } else if (ctl == cAccel || ctl == cFixed) {
         const bool on = ctl == cAccel;
         if (g.cur.accel[seat].on != on) {
             g.cur.accel[seat].on = on;
@@ -1509,6 +1614,8 @@ int RunSettings(HINSTANCE inst) {
     g.cur = g.opened;
     g.padSeat = TouchpadSeat(g.opened);
     g.screens = ListScreens();
+    for (int i = 0; i < g.seats && i < kMaxSeats; ++i) g.off[i] = g.offOpened[i] = SeatSetAside(g.opened, i);
+    RefreshBrands(g.opened);
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);

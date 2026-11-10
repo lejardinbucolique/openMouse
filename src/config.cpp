@@ -260,6 +260,9 @@ bool Config::Load(const std::wstring& path) {
                          : (val == L"off") ? Touchpad::Off : Touchpad::Auto;
         } else if (section == L"mouse") {
             mouseBinding[key] = _wtoi(val.c_str());
+        } else if (section == L"disabled") {
+            if ((val == L"1" || val == L"true") && disabledMice.size() < kMaxDisabled)
+                disabledMice.insert(key);
         } else if (section == L"keyboard") {
             keyboardBinding[key] = _wtoi(val.c_str());
         } else if (section.rfind(L"seat", 0) == 0) {
@@ -368,6 +371,9 @@ bool Config::Save(const std::wstring& path) const {
     t += L"[mouse]\n";
     for (const auto& kv : mouseBinding)
         t += kv.first + L"=" + std::to_wstring(kv.second) + L"\n";
+    t += L"\n[disabled]\n";
+    for (const auto& kv : mouseBinding)
+        if (disabledMice.count(kv.first)) t += kv.first + L"=1\n";
     t += L"\n[keyboard]\n";
     for (const auto& kv : keyboardBinding)
         t += kv.first + L"=" + std::to_wstring(kv.second) + L"\n";

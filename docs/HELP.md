@@ -54,6 +54,18 @@ Click the icon next to the clock, then **Settings…**. One area per mouse. Ever
 applies and is saved at once; **Undo my changes** restores the values the window opened
 with.
 
+### Recognising and setting aside a mouse
+
+The title of each area gives the make of the mouse ("Logitech mouse"), read from the mouse
+itself or, failing that, from its manufacturer. When the make cannot be read, the title
+stays "Mouse" followed by a number; two mice of the same make also carry their number.
+
+The **Disable** box, at the right of the title, sets the mouse aside without unplugging it:
+its pointer disappears and nothing it does is taken into account, at once. Unticked, it comes
+back where it stopped, with its colour and speed. The last working mouse cannot be disabled
+(the touchpad counts while it is in use): openMouse refuses, so you are never left without a
+pointer.
+
 ### Pointer look
 
 - **Colour**: ten colours, to recognise your pointer at a glance.

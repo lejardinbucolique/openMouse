@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <cstdint>
 
 namespace om {
@@ -60,6 +61,15 @@ struct DeviceInfo {
 std::vector<DeviceInfo> EnumerateDevices();
 std::wstring            DevicePathFromHandle(HANDLE h);
 std::wstring            FriendlyNameFromPath(const std::wstring& path);
+
+// The make of a mouse, for the title of its section in the settings window
+// ("Logitech"), or "" when nothing specific can be told ("USB Optical Mouse"
+// names no make). Sources, in this order: the manufacturer string the device
+// reports itself (only read while it is plugged in, and only from `plugged`
+// interfaces the caller found by enumerating), the table of common makers by
+// USB vendor id, the product string, the name Windows gives it. A generic
+// name ("HID-compliant mouse") is never a make.
+std::wstring            MouseBrand(const std::wstring& path, bool plugged);
 
 // Identity that survives a change of USB port or of enumeration order. The
 // interface path embeds an instance id (the "6&1b42cbdd&0&0000" part) that
@@ -184,6 +194,13 @@ struct Config {
     // Per-seat device bindings, keyed by device interface path.
     std::map<std::wstring, int> mouseBinding;
     std::map<std::wstring, int> keyboardBinding;
+
+    // Mice the user set aside from the settings window, by the same interface
+    // path as mouseBinding (ini section [disabled]): they stay bound to their
+    // seat, with its colour and speed, but their input is ignored. A path that
+    // is not bound is not kept.
+    std::set<std::wstring> disabledMice;
+    static constexpr size_t kMaxDisabled = 64;
 
     std::vector<COLORREF> seatColors = {
         RGB(0xFF, 0xDD, 0x00),   // seat 0 — bright yellow (blue vanished on busy screens)
