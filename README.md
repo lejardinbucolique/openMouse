@@ -518,4 +518,6 @@ characters inside wide string literals as well as narrow ones.
 
 ## Licence
 
+openMouse, créé par Alston Mendonca, amélioré et mis au point par [Calepitool](https://calepitool.fr/).
+
 MIT. See [LICENSE](LICENSE).

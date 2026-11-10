@@ -54,7 +54,7 @@ enum Str {
     sLook, sColorLabel, sStyleLabel, sColorCustom,
     sStyle0, sStyle1, sStyle2, sStyle3, sStyle4,
     sCol0, sCol1, sCol2, sCol3, sCol4, sCol5, sCol6, sCol7, sCol8, sCol9,
-    sFixed, sExplainFixed, sExplainAccel, sSeatAbsent,
+    sFixed, sExplainFixed, sExplainAccel, sSeatAbsent, sAbout,
     sTouchpad, sPadCut, sPadMode, sPadAuto, sPadOn, sPadOff, sStrCount
 };
 
@@ -124,6 +124,7 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Every movement is multiplied by the same value.",
     L"Slow for small gestures, fast for wide ones. The threshold sets where it speeds up.",
     L" (unplugged)",
+    L"About: openMouse, created by Alston Mendonca, improved and developed by Calepitool.",
     L"Touchpad",
     L" (cut off)",
     L"Touchpad mode",
@@ -198,6 +199,7 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Chaque mouvement est multiplié par la même valeur.",
     L"Lent pour les petits gestes, rapide pour les grands. Le seuil règle où ça accélère.",
     L" (débranchée)",
+    L"À propos : openMouse, créé par Alston Mendonca, amélioré et mis au point par Calepitool.",
     L"Pavé tactile",
     L" (coupé)",
     L"Mode du pavé tactile",
@@ -235,6 +237,8 @@ constexpr int kIdBase    = 1000;
 constexpr int kIdUndo    = 900;
 constexpr int kIdClose   = 901;
 constexpr int kIdAutostart = 902;
+constexpr int kIdSite    = 903;
+constexpr wchar_t kSiteUrl[] = L"https://calepitool.fr/";
 enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
                cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget,
                cColorLabel = 23, cColor, cStyleLabel, cStyle, cPreview, cFixed, cExplain,
@@ -264,7 +268,7 @@ struct State {
     int     seats = 2;
     SeatUi  ui[kMaxSeats];
     HWND    panel = nullptr;
-    HWND    hint = nullptr, status = nullptr, undo = nullptr, close = nullptr;
+    HWND    hint = nullptr, status = nullptr, about = nullptr, site = nullptr, undo = nullptr, close = nullptr;
     HWND    autostart = nullptr;     // "start with Windows", in the general section
     RECT    general{};               // title of the general section, painted by the window
     bool    autoWait = false;        // a change is in flight, polled by kTimerAutostart
@@ -881,6 +885,8 @@ void CreateControls(HWND hwnd) {
     ShowAutostart(ReadAutostart() == 1);
     g.hint   = Make(hwnd, L"STATIC", S(sHint), SS_LEFT, 0);
     g.status = Make(hwnd, L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, 0);
+    g.about  = Make(hwnd, L"STATIC", S(sAbout), SS_LEFT, 0);
+    g.site   = Make(hwnd, L"STATIC", kSiteUrl, SS_LEFT | SS_NOTIFY, kIdSite);
     g.undo   = Make(hwnd, L"BUTTON", S(sUndo), WS_TABSTOP | BS_PUSHBUTTON, kIdUndo);
     g.close  = Make(hwnd, L"BUTTON", S(sClose), WS_TABSTOP | BS_DEFPUSHBUTTON, kIdClose);
 }
@@ -1028,7 +1034,7 @@ SIZE Layout(HWND hwnd) {
     }
     const int width    = Px(kMargin) * 2 + Columns() * colW + (Columns() - 1) * Px(kGap);
     const int contentH = bottom + Px(kMargin);
-    const int footerH  = Px(12) + Px(86) + Px(28) + Px(30) + Px(kMargin);
+    const int footerH  = Px(12) + Px(86) + Px(28) + Px(30) + Px(12) + Px(18) + Px(18) + Px(kMargin);
 
     // The panel takes the height the screen allows; what does not fit scrolls.
     MONITORINFO mi{ sizeof(mi) };
@@ -1061,7 +1067,11 @@ SIZE Layout(HWND hwnd) {
     const int closeW = Px(100), undoW = Px(190), h = Px(30);
     place(g.close, width + sbW - Px(kMargin) - closeW, y, closeW, h);
     place(g.undo,  width + sbW - Px(kMargin) - closeW - Px(10) - undoW, y, undoW, h);
-    y += h + Px(kMargin);
+    y += h + Px(12);
+    place(g.about, Px(kMargin), y, inner, Px(18));
+    y += Px(18);
+    place(g.site, Px(kMargin), y, inner, Px(18));
+    y += Px(18) + Px(kMargin);
     InvalidateRect(g.panel, nullptr, TRUE);
     InvalidateRect(hwnd, nullptr, TRUE);
     return { width + sbW, y };
@@ -1352,6 +1362,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return SendMessageW(g.panel, msg, wp, lp);
     case WM_COMMAND:
         if (HIWORD(wp) == BN_CLICKED) OnCommand(hwnd, LOWORD(wp));
+        else if (HIWORD(wp) == STN_CLICKED && LOWORD(wp) == kIdSite)
+            ShellExecuteW(hwnd, L"open", kSiteUrl, nullptr, nullptr, SW_SHOWNORMAL);
         else if (HIWORD(wp) == CBN_SELCHANGE) {
             int seat, ctl;
             if (SeatOf(LOWORD(wp), seat, ctl)) {
@@ -1386,9 +1398,19 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // The window is white; the controls default to the dialog grey.
         HDC dc = (HDC)wp;
         SetBkColor(dc, GetSysColor(COLOR_WINDOW));
-        SetTextColor(dc, GetSysColor((HWND)lp == g.hint ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+        const HWND ctl = (HWND)lp;
+        COLORREF text = GetSysColor(COLOR_WINDOWTEXT);
+        if (ctl == g.hint || ctl == g.about) text = GetSysColor(COLOR_GRAYTEXT);
+        if (ctl == g.site) text = GetSysColor(COLOR_HOTLIGHT);
+        SetTextColor(dc, text);
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
+    case WM_SETCURSOR:
+        if ((HWND)wp == g.site) {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        break;
     case WM_DPICHANGED: {
         g.dpi = HIWORD(wp);
         const SIZE client = Layout(hwnd);
