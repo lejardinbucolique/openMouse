@@ -22,7 +22,9 @@ while the other scrolls a page over there.
 3. An icon appears next to the clock and two pointers of different colours are on screen.
 
 To start it with Windows: click the icon, **Settings…**, **General** section, tick
-**Start openMouse with Windows**.
+**Start openMouse with Windows**. This is only available once openMouse is installed in a
+protected folder such as `Program Files`, because the program then starts with full
+rights; from another folder (Downloads, Desktop…) the box is greyed out and says so.
 
 ## 2. Plug in two mice
 

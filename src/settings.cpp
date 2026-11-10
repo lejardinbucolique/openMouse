@@ -50,7 +50,7 @@ enum Str {
     sNoButtons, sNative, sActNone, sActLeft, sActRight, sActMiddle, sActBack, sActForward, sActKeys,
     sKeysNone, sKeysCapture, sWin, sCtrlName, sAltName, sShiftName, sWinName,
     sGeneral, sAutostart, sAutostartOn, sAutostartOff, sAutostartWait, sAutostartFail,
-    sAutostartDenied,
+    sAutostartDenied, sAutostartUnsafe, sAutostartTaskUnsafe,
     sLook, sColorLabel, sStyleLabel, sColorCustom,
     sStyle0, sStyle1, sStyle2, sStyle3, sStyle4,
     sCol0, sCol1, sCol2, sCol3, sCol4, sCol5, sCol6, sCol7, sCol8, sCol9,
@@ -110,6 +110,8 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Waiting for Windows to confirm…",
     L"Windows did not take the change. Run openMouse as administrator and try again.",
     L"Cancelled: administrator permission was refused, nothing changed.",
+    L"Starting with Windows is only available once openMouse has been installed by its installer, in a protected folder.",
+    L"The start-with-Windows task points to a folder that ordinary programs can change. Untick the box to remove it.",
     L"Pointer look",
     L"Colour",
     L"Pointer set",
@@ -185,6 +187,8 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"En attente de la confirmation de Windows…",
     L"Windows n'a pas pris le changement. Lancez openMouse en administrateur et recommencez.",
     L"Annulé : l'autorisation administrateur a été refusée, rien n'a changé.",
+    L"Le démarrage automatique n'est disponible qu'une fois openMouse installé par son programme d'installation, dans un dossier protégé.",
+    L"La tâche de démarrage automatique pointe vers un dossier que des programmes ordinaires peuvent modifier. Décochez la case pour la retirer.",
     L"Apparence de la flèche",
     L"Couleur",
     L"Jeu de curseurs",
@@ -270,6 +274,9 @@ struct State {
     HWND    panel = nullptr;
     HWND    hint = nullptr, status = nullptr, about = nullptr, site = nullptr, undo = nullptr, close = nullptr;
     HWND    autostart = nullptr;     // "start with Windows", in the general section
+    HWND    autoNote = nullptr;      // why it is refused, under the checkbox
+    bool    autoSafe = false;        // this copy sits where the task may be created
+    bool    autoRoom = false;        // the note has its place in the layout
     RECT    general{};               // title of the general section, painted by the window
     bool    autoWait = false;        // a change is in flight, polled by kTimerAutostart
     bool    autoWant = false;
@@ -409,12 +416,27 @@ void ShowAutostart(bool on) {
     SendMessageW(g.autostart, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
+// The box is only usable to create the task from a protected copy. A task that
+// exists can always be removed, and says so when it runs a program from a
+// folder ordinary users can change.
+void GateAutostart(int state) {
+    bool taskBad = false;
+    if (state == 1) {
+        const std::wstring task = AutostartTaskPath();
+        taskBad = !task.empty() && AutostartCheck(task) != AutostartVerdict::Ok;
+    }
+    EnableWindow(g.autostart, g.autoSafe || state == 1);
+    const wchar_t* note = taskBad ? S(sAutostartTaskUnsafe) : (!g.autoSafe && state != 1) ? S(sAutostartUnsafe) : L"";
+    SetWindowTextW(g.autoNote, note);
+    ShowWindow(g.autoNote, *note ? SW_SHOW : SW_HIDE);
+}
+
 void FinishAutostart(HWND hwnd, bool ok, int state) {
     KillTimer(hwnd, kTimerAutostart);
     if (g.autoHelper) { CloseHandle(g.autoHelper); g.autoHelper = nullptr; }
     g.autoWait = false;
-    EnableWindow(g.autostart, TRUE);
     ShowAutostart(state >= 0 ? state == 1 : !g.autoWant);   // what is real, not what was clicked
+    GateAutostart(state >= 0 ? state : g.autoWant ? 0 : 1);
     SetStatus(ok ? S(g.autoWant ? sAutostartOn : sAutostartOff) : S(sAutostartFail));
 }
 
@@ -433,6 +455,11 @@ void OnAutostart(HWND hwnd) {
     if (g.autoWait) return;
     g.autoWant = SendMessageW(g.autostart, BM_GETCHECK, 0, 0) == BST_CHECKED;
     g.autoTries = 0;
+    if (g.autoWant && !g.autoSafe) {   // the engine would refuse too; no prompt for nothing
+        ShowAutostart(false);
+        SetStatus(S(sAutostartUnsafe));
+        return;
+    }
 
     DWORD_PTR r;
     const bool sent = AskEngine(kAutostartQuery, r) && (r & kAutoElevated) &&
@@ -882,7 +909,12 @@ void CreateControls(HWND hwnd) {
     HWND p = g.panel;
     for (int i = 0; i < g.seats; ++i) CreateSeatControls(i);
     g.autostart = Make(p, L"BUTTON", S(sAutostart), WS_TABSTOP | BS_AUTOCHECKBOX, kIdAutostart);
-    ShowAutostart(ReadAutostart() == 1);
+    g.autoNote = Make(p, L"STATIC", L"", SS_LEFT, 0);
+    g.autoSafe = AutostartCheck(SelfPath()) == AutostartVerdict::Ok;
+    const int autoState = ReadAutostart();
+    ShowAutostart(autoState == 1);
+    GateAutostart(autoState);
+    g.autoRoom = GetWindowTextLengthW(g.autoNote) > 0;   // refused here, or a task to be removed
     g.hint   = Make(hwnd, L"STATIC", S(sHint), SS_LEFT, 0);
     g.status = Make(hwnd, L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, 0);
     g.about  = Make(hwnd, L"STATIC", S(sAbout), SS_LEFT, 0);
@@ -1023,6 +1055,10 @@ SIZE Layout(HWND hwnd) {
     gy += Px(34);
     place(g.autostart, Px(kMargin), gy, genW, Px(22));
     gy += Px(22);
+    if (g.autoRoom) {
+        place(g.autoNote, Px(kMargin) + Px(20), gy + Px(2), genW - Px(20), Px(36));
+        gy += Px(40);
+    }
 
     int bottom = gy, rowTop = gy + Px(30), rowEnd = 0;
     for (int i = 0; i < g.seats; ++i) {

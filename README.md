@@ -328,7 +328,7 @@ Each arrow that moves costs about 0.2 to 0.3 ms per flush (measured, 1 to 8 over
 | `--monitor` | Log system-wide button events with provenance |
 | `--restore-cursor` | Restore a system cursor left hidden |
 | `--autostart=on` / `off` | Create or delete the logon task (needs administrator; the settings window runs it for you) |
-| `--autostart=dry-run` | Print the task definition that would be registered and the task's current state; registers nothing |
+| `--autostart=dry-run` | Say whether this copy is in a protected folder (and why not), print the task definition that would be registered and the task's current state; registers nothing |
 | `--help` | Usage summary |
 
 Run flags: `--verbose` enables per-event tracing to the log, `--seconds=N` exits after N
@@ -363,6 +363,15 @@ running as administrator it does it silently; otherwise Windows asks for permiss
 for that change. The task only ever starts this same executable, from the folder it was
 ticked in: moving `openmouse.exe` afterwards means untick and tick again. You can see or
 remove the task by hand in the Task Scheduler, or with `schtasks /Delete /TN openMouse /F`.
+
+The task starts the program with full rights and no prompt, so it is only created for a copy
+that nothing but an administrator can replace: on a fixed local disk, with no link or
+junction in its path, and with neither the file nor any folder above it changeable by an
+ordinary account (`Program Files` qualifies; your user profile, Downloads or Desktop do
+not). From anywhere else the box is greyed out with an explanation, and the engine and
+`--autostart=on` refuse as well, whatever the settings window said. An existing task that
+points to a changeable folder is flagged in the settings window; unticking the box removes
+it. `--autostart=dry-run` prints the verdict and the reason without changing anything.
 
 At logon `--startup` waits (40 s at most) for the taskbar and for one mouse to exist before
 hiding the hardware cursor, and does nothing if an engine is already running. If it fails

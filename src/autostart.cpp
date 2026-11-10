@@ -12,8 +12,16 @@
 // rights. The elevated engine does it on request of the settings window; when
 // the engine is not running or not elevated, the settings window starts a
 // one-shot elevated copy of this program (--autostart=on / --autostart=off).
+//
+// The task starts the program with full rights and no prompt, from wherever
+// the file is. So the task is only created for a copy that nobody but an
+// administrator can replace: see AutostartCheck. The settings window and the
+// code that creates the task both run that check; the second does not trust
+// the first.
 #include "openmouse.h"
 #include <taskschd.h>
+#include <aclapi.h>
+#include <sddl.h>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "taskschd.lib")
@@ -99,8 +107,83 @@ std::wstring CurrentUser() {
     return *domain ? std::wstring(domain) + L"\\" + user : std::wstring(user);
 }
 
-std::wstring TaskXml() {
-    const std::wstring exe = SelfPath();
+// ---- is this copy of the program out of reach of ordinary users?
+
+// Accounts allowed to change the program: the system, the administrators and
+// the installer service. Anything else, a user's own account included (even an
+// administrator's, whose unelevated programs run under its name), is not.
+bool IsTrustedSid(PSID sid) {
+    if (!sid) return false;
+    if (IsWellKnownSid(sid, WinLocalSystemSid) || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) ||
+        IsWellKnownSid(sid, WinCreatorOwnerSid))
+        return true;
+    static PSID installer = [] {
+        PSID s = nullptr;
+        ConvertStringSidToSidW(L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", &s);
+        return s;
+    }();
+    return installer && EqualSid(sid, installer);
+}
+
+// What it takes to change a file, or what a folder holds.
+constexpr DWORD kChangeRights = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_DELETE_CHILD | DELETE |
+                                WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
+// What it takes to rename or delete a folder, and so swap what is under it.
+// Adding something beside it (a new folder in the root of the disk) does not.
+constexpr DWORD kReplaceRights = FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_ALL;
+
+// True when only trusted accounts own `path` and hold any of `rights` on it.
+// What cannot be read counts as not protected. Denying entries are ignored,
+// which can only refuse too much.
+bool OnlyTrustedHold(const std::wstring& path, DWORD rights) {
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    PSID owner = nullptr;
+    PACL dacl = nullptr;
+    if (GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                              &owner, nullptr, &dacl, nullptr, &sd) != ERROR_SUCCESS)
+        return false;
+    bool ok = IsTrustedSid(owner) && dacl;   // no DACL at all: full access for everyone
+    for (WORD i = 0; ok && i < dacl->AceCount; ++i) {
+        void* ace = nullptr;
+        if (!GetAce(dacl, i, &ace)) { ok = false; break; }
+        const ACE_HEADER* h = static_cast<const ACE_HEADER*>(ace);
+        if (h->AceType != ACCESS_ALLOWED_ACE_TYPE && h->AceType != ACCESS_ALLOWED_CALLBACK_ACE_TYPE) continue;
+        if (h->AceFlags & INHERIT_ONLY_ACE) continue;   // only for what is created under it
+        const ACCESS_ALLOWED_ACE* a = static_cast<const ACCESS_ALLOWED_ACE*>(ace);
+        if ((a->Mask & rights) && !IsTrustedSid(reinterpret_cast<PSID>(const_cast<DWORD*>(&a->SidStart))))
+            ok = false;
+    }
+    LocalFree(sd);
+    return ok;
+}
+
+// The path as the file system resolves it, without the "\\?\" prefix. Empty
+// when it cannot be opened or is not a drive-letter path; `local` says whether
+// the drive is a fixed disk.
+std::wstring ResolvedPath(const std::wstring& path, bool& local) {
+    local = false;
+    HANDLE h = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return L"";
+    std::wstring out(MAX_PATH, L'\0');
+    DWORD n = GetFinalPathNameByHandleW(h, &out[0], (DWORD)out.size(), VOLUME_NAME_DOS);
+    if (n >= out.size()) {
+        out.resize(n + 1);
+        n = GetFinalPathNameByHandleW(h, &out[0], (DWORD)out.size(), VOLUME_NAME_DOS);
+    }
+    CloseHandle(h);
+    if (n == 0 || n >= out.size()) return L"";
+    out.resize(n);
+    if (out.compare(0, 4, L"\\\\?\\") != 0) return L"";
+    out.erase(0, 4);
+    // "C:\..." only: a network share (\\?\UNC\...) is somebody else's to change.
+    if (out.size() < 3 || out[1] != L':' || out[2] != L'\\') return L"";
+    const wchar_t root[4] = { out[0], L':', L'\\', 0 };
+    local = GetDriveTypeW(root) == DRIVE_FIXED;
+    return out;
+}
+
+std::wstring TaskXml(const std::wstring& exe) {
     if (exe.empty()) return L"";
     std::wstring dir = exe;
     const size_t slash = dir.rfind(L'\\');
@@ -135,6 +218,77 @@ std::wstring TaskXml() {
 
 } // namespace
 
+AutostartVerdict AutostartCheck(const std::wstring& exe) {
+    if (exe.empty()) return AutostartVerdict::Unreadable;
+    bool local = false;
+    const std::wstring real = ResolvedPath(exe, local);
+    if (real.empty()) return AutostartVerdict::Unreadable;
+    if (!local) return AutostartVerdict::NotLocal;
+    // A link, a junction, a substituted drive or a short name anywhere in the
+    // path makes the resolved path differ: what would run is not what is checked.
+    if (_wcsicmp(real.c_str(), exe.c_str()) != 0) return AutostartVerdict::Link;
+
+    if (!OnlyTrustedHold(real, kChangeRights)) return AutostartVerdict::Writable;
+    // The folder holding it, then every folder above it.
+    std::wstring dir = real;
+    for (bool first = true;; first = false) {
+        const size_t slash = dir.rfind(L'\\');
+        if (slash == std::wstring::npos) break;
+        dir.resize(slash);
+        if (dir.size() == 2) dir += L'\\';   // "C:" is a current folder, "C:\" the root
+        if (!OnlyTrustedHold(dir, first ? kChangeRights : kReplaceRights)) return AutostartVerdict::Writable;
+        if (dir.size() == 3) break;
+    }
+    return AutostartVerdict::Ok;
+}
+
+const wchar_t* AutostartVerdictText(AutostartVerdict v) {
+    switch (v) {
+    case AutostartVerdict::Ok:       return L"in a protected folder";
+    case AutostartVerdict::NotLocal: return L"not on a local disk";
+    case AutostartVerdict::Link:     return L"reached through a link, a junction, a substituted drive or a short name";
+    case AutostartVerdict::Writable: return L"in a folder an ordinary user can change, or the file itself can be changed";
+    default:                         return L"its rights could not be read";
+    }
+}
+
+// The program the task runs, or "" when there is no task or it cannot be read.
+std::wstring AutostartTaskPath() {
+    ComScope com;
+    if (!com.ok()) return L"";
+    ITaskService* svc = nullptr;
+    ITaskFolder* root = nullptr;
+    std::wstring path;
+    if (SUCCEEDED(OpenRoot(svc, root))) {
+        BSTR name = SysAllocString(kTaskName);
+        IRegisteredTask* task = nullptr;
+        const HRESULT hr = root->GetTask(name, &task);
+        SysFreeString(name);
+        ITaskDefinition* def = nullptr;
+        IActionCollection* actions = nullptr;
+        IAction* action = nullptr;
+        IExecAction* exec = nullptr;
+        if (SUCCEEDED(hr) && SUCCEEDED(task->get_Definition(&def)) && SUCCEEDED(def->get_Actions(&actions)) &&
+            SUCCEEDED(actions->get_Item(1, &action)) &&
+            SUCCEEDED(action->QueryInterface(IID_IExecAction, (void**)&exec))) {
+            BSTR p = nullptr;
+            if (SUCCEEDED(exec->get_Path(&p)) && p) {
+                path = p;
+                SysFreeString(p);
+            }
+        }
+        Release(exec);
+        Release(action);
+        Release(actions);
+        Release(def);
+        Release(task);
+    }
+    Release(root);
+    Release(svc);
+    if (path.size() >= 2 && path.front() == L'"' && path.back() == L'"') path = path.substr(1, path.size() - 2);
+    return path;
+}
+
 bool IsElevated() {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
@@ -166,7 +320,14 @@ int AutostartState() {
 }
 
 bool AutostartInstall() {
-    const std::wstring xml = TaskXml();
+    // Checked here whoever asked: the settings window's own check is a courtesy.
+    const std::wstring exe = SelfPath();
+    const AutostartVerdict verdict = AutostartCheck(exe);
+    if (verdict != AutostartVerdict::Ok) {
+        LogLine(L"[autostart] refused, no task created: %s", AutostartVerdictText(verdict));
+        return false;
+    }
+    const std::wstring xml = TaskXml(exe);
     if (xml.empty()) return false;
     ComScope com;
     if (!com.ok()) return false;
@@ -223,7 +384,23 @@ int RunAutostartDryRun() {
     const int state = AutostartState();
     LogLine(L"[autostart] task \"%s\" now: %s", kTaskName,
             state == 1 ? L"present" : state == 0 ? L"absent" : L"unknown (not readable from here)");
-    std::wstring xml = TaskXml();
+    const std::wstring exe = SelfPath();
+    const AutostartVerdict verdict = AutostartCheck(exe);
+    LogLine(L"[autostart] this copy: %s", exe.c_str());
+    LogLine(L"[autostart] check: %s: %s", verdict == AutostartVerdict::Ok ? L"accepted" : L"REFUSED",
+            AutostartVerdictText(verdict));
+    const std::wstring taskPath = AutostartTaskPath();
+    if (!taskPath.empty()) {
+        const AutostartVerdict tv = AutostartCheck(taskPath);
+        LogLine(L"[autostart] the existing task runs %s: %s: %s", taskPath.c_str(),
+                tv == AutostartVerdict::Ok ? L"accepted" : L"REFUSED", AutostartVerdictText(tv));
+    }
+    if (verdict != AutostartVerdict::Ok) {
+        LogLine(L"[autostart] enable would create nothing");
+        LogLine(L"[autostart] disable would call ITaskFolder::DeleteTask(\"%s\", 0)", kTaskName);
+        return 1;
+    }
+    std::wstring xml = TaskXml(exe);
     if (xml.empty()) { LogLine(L"[autostart] could not build the definition"); return 1; }
     LogLine(L"[autostart] enable would call ITaskFolder::RegisterTask(\"%s\", xml, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN) with:", kTaskName);
     size_t at;

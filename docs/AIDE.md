@@ -25,7 +25,10 @@ sa souris : l'une clique ici, l'autre fait défiler une page là-bas.
    à l'écran.
 
 Pour que le programme démarre avec Windows : clic sur l'icône, **Réglages…**, section
-**Général**, case **Lancer openMouse au démarrage de Windows**.
+**Général**, case **Lancer openMouse au démarrage de Windows**. Cette case n'est
+disponible qu'une fois openMouse installé dans un dossier protégé comme `Program Files`,
+car le programme démarre alors avec tous les droits ; depuis un autre dossier
+(Téléchargements, Bureau…) elle est grisée et le dit.
 
 ## 2. Brancher deux souris
 

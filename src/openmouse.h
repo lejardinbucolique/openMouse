@@ -336,7 +336,17 @@ constexpr LRESULT kAutoElevated = 4;   // the engine may create or delete it
 bool IsElevated();
 // 1: the task exists, 0: it does not, -1: this process may not see it.
 int  AutostartState();
-// Both need administrator rights.
+// The task runs the program with full rights and no prompt, so it is only
+// created for a copy nobody but an administrator can replace: a fixed local
+// disk, no link or junction in the path, and neither the file nor any folder
+// above it changeable by an ordinary account. Needs no rights to ask.
+enum class AutostartVerdict { Ok, NotLocal, Link, Writable, Unreadable };
+AutostartVerdict AutostartCheck(const std::wstring& exe);
+const wchar_t* AutostartVerdictText(AutostartVerdict v);   // English, for the log
+// The program an existing task runs, "" when there is none or it cannot be read.
+std::wstring AutostartTaskPath();
+// Both need administrator rights. Install applies AutostartCheck to this
+// program and creates nothing when it fails.
 bool AutostartInstall();
 bool AutostartRemove();
 // openmouse.exe --autostart=on|off, started elevated by the settings window.
