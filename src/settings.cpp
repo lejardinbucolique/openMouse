@@ -438,14 +438,14 @@ void OnAutostart(HWND hwnd) {
     const bool sent = AskEngine(kAutostartQuery, r) && (r & kAutoElevated) &&
                       AskEngine(g.autoWant ? kAutostartEnable : kAutostartDisable, r);
     if (!sent) {
-        wchar_t exe[MAX_PATH];
-        if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+        const std::wstring exe = SelfPath();
+        if (exe.empty()) return;
         SHELLEXECUTEINFOW sei{};
         sei.cbSize       = sizeof(sei);
         sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
         sei.hwnd         = hwnd;
         sei.lpVerb       = L"runas";
-        sei.lpFile       = exe;
+        sei.lpFile       = exe.c_str();
         sei.lpParameters = g.autoWant ? L"--autostart=on" : L"--autostart=off";
         sei.nShow        = SW_HIDE;
         if (!ShellExecuteExW(&sei)) {   // the prompt was refused, or nothing could start

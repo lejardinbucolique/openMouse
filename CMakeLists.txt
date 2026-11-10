@@ -31,7 +31,9 @@ if(MSVC)
     # system ANSI codepage and mangles every non-ASCII character, wide string
     # literals included.
     target_compile_options(openmouse PRIVATE /W4 /permissive- /utf-8)
-    set_target_properties(openmouse PROPERTIES LINK_FLAGS "/ENTRY:wWinMainCRTStartup")
+    # 0x800 = LOAD_LIBRARY_SEARCH_SYSTEM32: the program's own DLLs come from
+    # System32 only, never from the folder the program sits in.
+    set_target_properties(openmouse PROPERTIES LINK_FLAGS "/ENTRY:wWinMainCRTStartup /DEPENDENTLOADFLAG:0x800")
 else()
     target_compile_options(openmouse PRIVATE -Wall -Wextra -municode)
     target_link_options(openmouse PRIVATE -municode -static-libgcc -static-libstdc++)

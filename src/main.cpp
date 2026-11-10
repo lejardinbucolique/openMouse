@@ -160,7 +160,9 @@ struct MagApi {
 
     bool Load() {
         if (ShowSystemCursor) return true;
-        lib = LoadLibraryW(L"magnification.dll");
+        // From System32 only: the engine runs elevated, and the folder it sits
+        // in is not necessarily one only an administrator can write to.
+        lib = LoadLibraryExW(L"magnification.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!lib) return false;
         Initialize       = (BOOL (WINAPI*)())        (void*)GetProcAddress(lib, "MagInitialize");
         Uninitialize     = (BOOL (WINAPI*)())        (void*)GetProcAddress(lib, "MagUninitialize");
@@ -1254,10 +1256,13 @@ void OnMouseHidReport(HANDLE dev, int seat, const BYTE* p, size_t n) {
     }
 }
 
-void OnRawHid(HANDLE dev, const RAWHID& h) {
+void OnRawHid(HANDLE dev, const RAWHID& h, size_t avail) {
     if (g_learnSeat < 0 && !g_haveKeyMaps) return;
     const auto owner = g_ownerSeat.find(dev);
     if (owner == g_ownerSeat.end() || h.dwSizeHid == 0) return;
+    // The reports must lie inside what Windows handed over: the counts come
+    // from the device's side of the driver.
+    if ((uint64_t)h.dwSizeHid * h.dwCount > avail) return;
     const BYTE* p = h.bRawData;
     for (DWORD c = 0; c < h.dwCount; ++c, p += h.dwSizeHid)
         OnMouseHidReport(dev, owner->second, p, h.dwSizeHid);
@@ -1445,7 +1450,7 @@ void OnRawInput(HRAWINPUT h) {
     auto* ri = reinterpret_cast<RAWINPUT*>(stack);
     if (ri->header.dwType == RIM_TYPEMOUSE)         { ++g_rawMouse; OnRawMouse(ri->header.hDevice, ri->data.mouse); }
     else if (ri->header.dwType == RIM_TYPEKEYBOARD) { ++g_rawKbd;   OnRawKeyboard(ri->header.hDevice, ri->data.keyboard); }
-    else if (ri->header.dwType == RIM_TYPEHID)      { OnRawHid(ri->header.hDevice, ri->data.hid); }
+    else if (ri->header.dwType == RIM_TYPEHID)      { OnRawHid(ri->header.hDevice, ri->data.hid, size > offsetof(RAWINPUT, data.hid.bRawData) ? size - offsetof(RAWINPUT, data.hid.bRawData) : 0); }
 }
 
 // ---------------------------------------------------------------- gate
@@ -3130,8 +3135,7 @@ int RunReceiver() {
     const size_t slash = path.rfind(L'\\');
     path = (slash == std::wstring::npos) ? std::wstring(L"receiver.log")
                                          : path.substr(0, slash + 1) + L"receiver.log";
-    g_recvLog = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    g_recvLog = OpenSafeFile(path, SafeOpen::Rewrite);
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);
@@ -3202,8 +3206,7 @@ int RunMonitor() {
     const size_t slash = path.rfind(L'\\');
     path = (slash == std::wstring::npos) ? std::wstring(L"monitor.log")
                                          : path.substr(0, slash + 1) + L"monitor.log";
-    g_monLog = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    g_monLog = OpenSafeFile(path, SafeOpen::Rewrite);
 
     HHOOK hook = SetWindowsHookExW(WH_MOUSE_LL, MonitorHook, GetModuleHandleW(nullptr), 0);
     if (!hook) { LogLine(L"[monitor] SetWindowsHookEx failed: %lu", GetLastError()); return 1; }
@@ -3249,15 +3252,14 @@ int RunJanitor(DWORD parentPid) {
 }
 
 void SpawnJanitor() {
-    wchar_t exe[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
-    wchar_t cmd[MAX_PATH + 40];
-    swprintf(cmd, MAX_PATH + 40, L"\"%s\" --janitor=%lu", exe, GetCurrentProcessId());
+    const std::wstring exe = SelfPath();
+    if (exe.empty()) return;
+    std::wstring cmd = L"\"" + exe + L"\" --janitor=" + std::to_wstring(GetCurrentProcessId());
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE,
+    if (CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, FALSE,
                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
@@ -3276,14 +3278,13 @@ constexpr UINT kTrayCmdSettings = 104;
 
 // Relaunch ourselves in another mode. Used by the tray menu.
 void RelaunchSelf(const wchar_t* args) {
-    wchar_t exe[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
-    wchar_t cmd[MAX_PATH + 64];
-    swprintf(cmd, MAX_PATH + 64, L"\"%s\" %s", exe, args);
+    const std::wstring exe = SelfPath();
+    if (exe.empty()) return;
+    std::wstring cmd = L"\"" + exe + L"\" " + args;
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    if (CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
@@ -3562,14 +3563,14 @@ int RunRestoreCursor() {
 // arguments plus --elevated so the copy never asks a second time. True when
 // the elevated copy is on its way and this one should simply leave.
 bool RelaunchElevated(const std::wstring& args) {
-    wchar_t exe[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return false;
+    const std::wstring exe = SelfPath();
+    if (exe.empty()) return false;
     const std::wstring params = args.empty() ? L"--elevated" : args + L" --elevated";
     SHELLEXECUTEINFOW sei{};
     sei.cbSize       = sizeof(sei);
     sei.fMask        = SEE_MASK_NOASYNC;
     sei.lpVerb       = L"runas";
-    sei.lpFile       = exe;
+    sei.lpFile       = exe.c_str();
     sei.lpParameters = params.c_str();
     sei.nShow        = SW_HIDE;
     if (ShellExecuteExW(&sei)) {

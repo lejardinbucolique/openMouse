@@ -67,7 +67,32 @@ std::wstring XmlEscape(const std::wstring& s) {
     return o;
 }
 
+// DOMAIN\name of the account this process runs as, read from its token: the
+// environment is the caller's to set, and the task runs under this name.
+std::wstring UserFromToken() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return L"";
+    std::wstring out;
+    DWORD need = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &need);
+    if (need) {
+        std::vector<BYTE> buf(need);
+        if (GetTokenInformation(token, TokenUser, buf.data(), need, &need)) {
+            wchar_t name[256], domain[256];
+            DWORD nl = 256, dl = 256;
+            SID_NAME_USE use;
+            if (LookupAccountSidW(nullptr, reinterpret_cast<TOKEN_USER*>(buf.data())->User.Sid,
+                                  name, &nl, domain, &dl, &use) && *name)
+                out = *domain ? std::wstring(domain) + L"\\" + name : std::wstring(name);
+        }
+    }
+    CloseHandle(token);
+    return out;
+}
+
 std::wstring CurrentUser() {
+    const std::wstring fromToken = UserFromToken();
+    if (!fromToken.empty()) return fromToken;
     wchar_t domain[256] = L"", user[256] = L"";
     GetEnvironmentVariableW(L"USERDOMAIN", domain, 256);
     GetEnvironmentVariableW(L"USERNAME", user, 256);
@@ -75,8 +100,8 @@ std::wstring CurrentUser() {
 }
 
 std::wstring TaskXml() {
-    wchar_t exe[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return L"";
+    const std::wstring exe = SelfPath();
+    if (exe.empty()) return L"";
     std::wstring dir = exe;
     const size_t slash = dir.rfind(L'\\');
     if (slash != std::wstring::npos) dir.resize(slash);

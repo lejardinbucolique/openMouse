@@ -354,6 +354,21 @@ void ClampToRect(POINT& p, const RECT& r);
 struct ScreenInfo { std::wstring name; RECT rc; bool primary; };
 std::vector<ScreenInfo> ListScreens();
 bool IsShellWindowClass(const wchar_t* cls);
+// Full path of this executable, or "" when it cannot be had whole (a path cut
+// short by a fixed buffer would name another file).
+std::wstring SelfPath();
+
+// Opens one of the files kept in the user's configuration folder (ini, log,
+// learn file...). That folder is writable by the user while the engine that
+// writes there may be elevated, so a link planted in place of the file or of
+// the folder must not be followed: the open is refused (INVALID_HANDLE_VALUE)
+// when the folder or the file is a reparse point, or when the file has other
+// names (hard links) and is being written.
+//   Read:    existing file, shared for reading.
+//   Rewrite: created if missing, emptied, held exclusively.
+//   Append:  created if missing, writes go to the end, shared with other writers.
+enum class SafeOpen { Read, Rewrite, Append };
+HANDLE OpenSafeFile(const std::wstring& path, SafeOpen how);
 void LogLine(const wchar_t* fmt, ...);
 void OpenLogFile();
 void CloseLogFile();
