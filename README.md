@@ -180,10 +180,12 @@ for each seat, the colour and the set of pointers (with a preview on a white, a 
 green and a yellow background), the sensitivity and the acceleration sliders described
 below. A change is
 written to the configuration file and taken by the running engine at once; **Undo my
-changes** puts back the values the window opened with. The window runs as a process of
-its own, so it never shares a thread with the input path. It speaks French when Windows
-does, English otherwise. Device bindings and the seat count are still set in the file for
-now.
+changes** puts back the mouse values the window opened with. The window has two tabs,
+**General** (start with Windows, language, help, credits) and **Mice** (one section per
+mouse), and runs as a process of its own, so it never shares a thread with the input path.
+It speaks French or English: the language of Windows by default, or the one chosen in the
+General tab (`language` in the ini), applied at once to the window, the tray menu and the
+messages. Device bindings and the seat count are still set in the file for now.
 
 `%APPDATA%\openMouse\openmouse.ini`
 
@@ -193,6 +195,7 @@ seats=2
 touchpad=auto         ; auto | on | off, see below
 capture_keyboards=0
 mark_active_seat=1
+language=auto         ; auto (language of Windows) | en | fr
 
 [seat0]
 color=FFDD00          ; FFFFFF renders the stock white arrow, 000000 the black scheme
@@ -383,7 +386,7 @@ Logs are written to `%APPDATA%\openMouse\openmouse.log` and rotate at 4 MB.
 
 ### Starting with Windows
 
-The settings window has a **General** section with the box "Start openMouse with
+The settings window has a **General** tab with the box "Start openMouse with
 Windows". It is off unless you tick it; openMouse never installs itself otherwise.
 
 Ticking it creates a Windows scheduled task named `openMouse`, triggered when you log on,
@@ -471,6 +474,7 @@ is drawn as a layered, click-through, topmost window.
 | `src/devices.cpp` | Device enumeration (mice, keyboards, HID collections), stable identity via the registry Enum key, make of a mouse |
 | `src/overlay.cpp` | Per-seat pointer rendering derived from the real system cursor |
 | `src/config.cpp` | Configuration load and save (seat values, learned buttons), logging |
+| `src/lang.cpp` | Interface language: the one in use, the list of languages, the messages of the engine (tray) |
 | `src/settings.cpp` | Settings window (`--settings`): per-seat speed, acceleration, screen, learned buttons, mouse set aside |
 
 ## Findings
@@ -550,9 +554,10 @@ With MinGW, including cross-compiling from Linux:
 
 ```
 x86_64-w64-mingw32-g++ -std=c++17 -municode -mwindows -O2 -Wall -static \
-    src/main.cpp src/devices.cpp src/overlay.cpp src/config.cpp \
+    src/main.cpp src/devices.cpp src/overlay.cpp src/config.cpp src/lang.cpp \
+    src/settings.cpp src/autostart.cpp \
     -o openmouse.exe -luser32 -lgdi32 -lshell32 -lole32 -luuid -ladvapi32 \
-    -static-libgcc -static-libstdc++
+    -lcomctl32 -loleaut32 -lwtsapi32 -static-libgcc -static-libstdc++
 ```
 
 `/utf-8` is required under MSVC. The sources are UTF-8 without a byte-order mark, and

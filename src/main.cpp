@@ -1149,16 +1149,15 @@ std::wstring HexString(const BYTE* p, size_t n) {
 }
 
 std::wstring MouseBitLabel(USHORT bit) {
-    const bool fr = UiFrench();
     switch (bit) {
-    case RI_MOUSE_LEFT_BUTTON_DOWN:   return fr ? L"Bouton gauche"        : L"Left button";
-    case RI_MOUSE_RIGHT_BUTTON_DOWN:  return fr ? L"Bouton droit"         : L"Right button";
-    case RI_MOUSE_MIDDLE_BUTTON_DOWN: return fr ? L"Bouton du milieu"     : L"Middle button";
-    case RI_MOUSE_BUTTON_4_DOWN:      return fr ? L"Bouton précédent (4)" : L"Back button (4)";
-    case RI_MOUSE_BUTTON_5_DOWN:      return fr ? L"Bouton suivant (5)"   : L"Forward button (5)";
+    case RI_MOUSE_LEFT_BUTTON_DOWN:   return T(Msg::BtnLeft);
+    case RI_MOUSE_RIGHT_BUTTON_DOWN:  return T(Msg::BtnRight);
+    case RI_MOUSE_MIDDLE_BUTTON_DOWN: return T(Msg::BtnMiddle);
+    case RI_MOUSE_BUTTON_4_DOWN:      return T(Msg::BtnBack);
+    case RI_MOUSE_BUTTON_5_DOWN:      return T(Msg::BtnForward);
     }
     wchar_t buf[64];
-    swprintf(buf, 64, fr ? L"Bouton spécial (0x%X)" : L"Special button (0x%X)", bit);
+    swprintf(buf, 64, T(Msg::BtnSpecial), bit);
     return buf;
 }
 
@@ -1203,7 +1202,7 @@ void OnMouseKeyboardInterface(HANDLE dev, USHORT scan, bool e0, bool up) {
         swprintf(sig, 16, L"k:%X", code);
         GetKeyNameTextW((LONG)(((UINT)scan << 16) | (e0 ? (1u << 24) : 0u)), name, 64);
         wchar_t label[128];
-        swprintf(label, 128, UiFrench() ? L"Touche « %s » de la souris" : L"Mouse key \"%s\"", name);
+        swprintf(label, 128, T(Msg::MouseKey), name);
         FinishLearn(seat, sig, label);
         return;
     }
@@ -1239,10 +1238,9 @@ void OnMouseHidReport(HANDLE dev, int seat, const BYTE* p, size_t n) {
         wchar_t head[16];
         swprintf(head, 16, L"h%X:", page);
         const std::wstring hex = HexString(p, n);
-        const bool fr = UiFrench();
-        const wchar_t* what = page == 0x0C   ? (fr ? L"Touche multimédia" : L"Media key")
-                            : page == 0xFF00 ? (fr ? L"Bouton du fabricant" : L"Manufacturer button")
-                                             : (fr ? L"Commande système" : L"System control");
+        const wchar_t* what = page == 0x0C   ? T(Msg::MediaKey)
+                            : page == 0xFF00 ? T(Msg::MakerButton)
+                                             : T(Msg::SystemControl);
         FinishLearn(seat, std::wstring(head) + hex, std::wstring(what) + L" " + hex.substr(0, 16));
         return;
     }
@@ -2138,11 +2136,19 @@ void ReclampSeats() {
     }
 }
 
+void TrayUpdateTip(HWND hwnd);
+
 void ReloadSettings() {
     Config fresh;
     if (!fresh.Load(Config::DefaultPath())) {
         LogLine(L"[settings] reload asked, but the configuration could not be read");
         return;
+    }
+    if (fresh.language != g_cfg.language) {   // the tray menu and the messages follow at once
+        g_cfg.language = fresh.language;
+        SetLanguageChoice(g_cfg.language);
+        TrayUpdateTip(g_hwnd);
+        LogLine(L"[settings] language: %s", LanguageCode(g_cfg.language));
     }
     g_cfg.sensitivity = fresh.sensitivity;
     g_cfg.accel       = fresh.accel;
@@ -3346,10 +3352,19 @@ void TrayAdd(HWND hwnd) {
                                   GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
                                   LR_SHARED);
     if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(nid.szTip, UiFrench()
-        ? L"openMouse : clic pour les réglages ou l'arrêt (urgence : Ctrl+Alt+Maj+Q)"
-        : L"openMouse — click for settings or to stop (panic: Ctrl+Alt+Shift+Q)");
+    wcsncpy_s(nid.szTip, T(Msg::TrayTip), _TRUNCATE);
     Shell_NotifyIconW(NIM_ADD, &nid);
+}
+
+// The language changed: say the tooltip again in the new one.
+void TrayUpdateTip(HWND hwnd) {
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd   = hwnd;
+    nid.uID    = kTrayIconId;
+    nid.uFlags = NIF_TIP;
+    wcsncpy_s(nid.szTip, T(Msg::TrayTip), _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
 // Without administrator rights Windows keeps the input aimed at elevated
@@ -3361,12 +3376,8 @@ void TrayWarnNotElevated(HWND hwnd) {
     nid.uID        = kTrayIconId;
     nid.uFlags     = NIF_INFO;
     nid.dwInfoFlags = NIIF_WARNING;
-    const bool fr = UiFrench();
-    wcscpy_s(nid.szInfoTitle, fr ? L"openMouse sans droits d'administrateur"
-                                 : L"openMouse without administrator rights");
-    wcscpy_s(nid.szInfo, fr
-        ? L"Le Gestionnaire des tâches et les fenêtres lancées en administrateur échapperont aux souris. Relancez openMouse en acceptant la demande d'autorisation."
-        : L"Task Manager and windows started as administrator will escape the mice. Start openMouse again and accept the permission prompt.");
+    wcsncpy_s(nid.szInfoTitle, T(Msg::WarnTitle), _TRUNCATE);
+    wcsncpy_s(nid.szInfo, T(Msg::WarnText), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
@@ -3379,21 +3390,17 @@ void TrayRemove(HWND hwnd) {
 }
 
 void TrayMenu(HWND hwnd) {
-    const bool fr = UiFrench();
-    wchar_t header[64];
-    if (fr) swprintf(header, 64, L"openMouse : %d souris%s", g_cfg.seatCount,
-                     g_cfg.captureKeyboards ? L", claviers dirigés" : L"");
-    else    swprintf(header, 64, L"openMouse — %d seats%s", g_cfg.seatCount,
-                     g_cfg.captureKeyboards ? L", keyboards steered" : L"");
+    wchar_t header[96];
+    swprintf(header, 96, T(Msg::TrayHeader), g_cfg.seatCount,
+             g_cfg.captureKeyboards ? T(Msg::TrayKeys) : L"");
 
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING | MF_DISABLED, kTrayCmdAbout, header);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kTrayCmdSettings, fr ? L"Réglages…" : L"Settings…");
-    AppendMenuW(menu, MF_STRING, kTrayCmdLog,      fr ? L"Ouvrir le dossier du journal" : L"Open log folder");
+    AppendMenuW(menu, MF_STRING, kTrayCmdSettings, T(Msg::MenuSettings));
+    AppendMenuW(menu, MF_STRING, kTrayCmdLog,      T(Msg::MenuLog));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kTrayCmdStop,     fr ? L"Arrêter openMouse\tCtrl+Alt+Maj+Q"
-                                                      : L"Stop openMouse\tCtrl+Alt+Shift+Q");
+    AppendMenuW(menu, MF_STRING, kTrayCmdStop,     T(Msg::MenuStop));
     SetMenuDefaultItem(menu, kTrayCmdSettings, FALSE);
 
     POINT pt{};
@@ -3454,6 +3461,7 @@ int RunMain(HINSTANCE inst) {
 
     g_inst = inst;
     g_cfg.Load(Config::DefaultPath());
+    SetLanguageChoice(g_cfg.language);
     if (g_startup) WaitForDesktop();
     std::thread([] { g_autoState = AutostartState(); }).detach();
 

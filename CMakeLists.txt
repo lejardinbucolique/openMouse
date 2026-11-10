@@ -9,6 +9,7 @@ add_executable(openmouse WIN32
     src/devices.cpp
     src/overlay.cpp
     src/config.cpp
+    src/lang.cpp
     src/settings.cpp
     src/autostart.cpp
 )

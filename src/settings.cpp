@@ -13,9 +13,15 @@
 // have saved in the meantime are kept. "Undo" puts back the values the window
 // opened with.
 //
-// The sections of the mice sit in a panel of their own that scrolls: with a
-// button section on top of the speed ones they no longer fit a small screen.
-// The panel only hosts the controls and forwards their notifications.
+// Two tabs: "General" (start with Windows, language, help, credits) and "Mice"
+// (one section per mouse). The sections of the mice sit in a panel of their own
+// that scrolls: with a button section on top of the speed ones they no longer
+// fit a small screen. The panel and the general page only host the controls and
+// forward their notifications. The window takes the height of the tab it shows.
+//
+// Text: every string lives in the tables below, one per language (lang.cpp says
+// which one is in use). The layout measures its text, so a longer language
+// needs no change here.
 #include "openmouse.h"
 #include <commctrl.h>
 #include <shellapi.h>   // ShellExecuteEx — not pulled in by WIN32_LEAN_AND_MEAN
@@ -30,14 +36,11 @@
 
 namespace om {
 
-bool UiFrench() {
-    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_FRENCH;
-}
-
 namespace {
 
 constexpr wchar_t kSettingsClass[] = L"openMouse.Settings";
 constexpr wchar_t kPanelClass[]    = L"openMouse.Settings.Panel";
+constexpr wchar_t kPageClass[]     = L"openMouse.Settings.Page";
 constexpr wchar_t kPreviewClass[]  = L"openMouse.Settings.Preview";
 constexpr wchar_t kEngineClass[]   = L"openMouse.Engine";
 
@@ -56,7 +59,8 @@ enum Str {
     sCol0, sCol1, sCol2, sCol3, sCol4, sCol5, sCol6, sCol7, sCol8, sCol9,
     sFixed, sExplainFixed, sExplainAccel, sSeatAbsent, sAbout,
     sTouchpad, sPadCut, sPadMode, sPadAuto, sPadOn, sPadOff,
-    sDisable, sBrandOne, sBrandMany, sLastActive, sStrCount
+    sDisable, sBrandOne, sBrandMany, sLastActive,
+    sTabMice, sLanguage, sLangAuto, sHelp, sHelpFail, sTipModes, sTipLearn, sStrCount
 };
 
 const wchar_t* const kStrEn[sStrCount] = {
@@ -75,9 +79,7 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"Default values",
     L"Undo my changes",
     L"Close",
-    L"Every change applies at once. A mouse takes one of the two modes: the other one's "
-    L"sliders are greyed out. A learned button acts at the position of the pointer of "
-    L"its own mouse.",
+    L"Changes apply at once.",
     L"Applied and saved.",
     L"Saved. openMouse is not running: it will be used at next start.",
     L"Could not save %s",
@@ -138,6 +140,13 @@ const wchar_t* const kStrEn[sStrCount] = {
     L"%s mouse",
     L"%s mouse (%d)",
     L"Cannot disable the last working mouse: one pointer has to stay.",
+    L"Mice",
+    L"Language",
+    L"Automatic (Windows language)",
+    L"Help",
+    L"Could not open the help page.",
+    L"A mouse takes one of the two modes: the other one's sliders are greyed out.",
+    L"A learned button acts at the position of the pointer of its own mouse.",
 };
 
 const wchar_t* const kStrFr[sStrCount] = {
@@ -156,9 +165,7 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Valeurs par défaut",
     L"Annuler mes changements",
     L"Fermer",
-    L"Chaque changement s'applique tout de suite. Une souris suit l'un des deux modes : les "
-    L"curseurs de l'autre sont grisés. Un bouton appris agit à la position de la flèche de "
-    L"sa propre souris.",
+    L"Les changements s'appliquent tout de suite.",
     L"Appliqué et enregistré.",
     L"Enregistré. openMouse n'est pas lancé : ce réglage servira au prochain démarrage.",
     L"Impossible d'enregistrer %s",
@@ -219,7 +226,17 @@ const wchar_t* const kStrFr[sStrCount] = {
     L"Souris %s",
     L"Souris %s (%d)",
     L"Impossible de désactiver la dernière souris active : il faut garder un pointeur.",
+    L"Souris",
+    L"Langue",
+    L"Automatique (langue de Windows)",
+    L"Aide",
+    L"Impossible d'ouvrir la page d'aide.",
+    L"Une souris suit l'un des deux modes : les curseurs de l'autre sont grisés.",
+    L"Un bouton appris agit à la position de la flèche de sa propre souris.",
 };
+
+// In the order of the Lang enum. An entry left empty falls back to English.
+const wchar_t* const* const kStr[kLangCount] = { kStrEn, kStrFr };
 
 // The colours offered for a mouse; the first one is the default of seat 0.
 const COLORREF kColors[10] = {
@@ -228,7 +245,10 @@ const COLORREF kColors[10] = {
     RGB(0xB8, 0xD8, 0x2A), RGB(0xFF, 0xFF, 0xFF),
 };
 
-const wchar_t* S(Str id) { return (UiFrench() ? kStrFr : kStrEn)[id]; }
+const wchar_t* S(Str id) {
+    const wchar_t* s = kStr[(int)UiLang()][id];
+    return (s && *s) ? s : kStrEn[id];
+}
 
 // ---------------------------------------------------------------- sliders
 
@@ -251,6 +271,10 @@ constexpr int kIdUndo    = 900;
 constexpr int kIdClose   = 901;
 constexpr int kIdAutostart = 902;
 constexpr int kIdSite    = 903;
+constexpr int kIdLang    = 904;
+constexpr int kIdHelp    = 905;
+constexpr int kIdTab     = 906;
+enum Tab { tabGeneral = 0, tabMice = 1 };
 constexpr wchar_t kSiteUrl[] = L"https://calepitool.fr/";
 enum SeatCtl { cLabel = 0, cValue = 4, cSlider = 8, cAccel = 12, cScreenLabel, cScreen, cDefaults,
                cLearn = 16, cNote, cList, cAction, cKeys, cWin, cForget,
@@ -282,12 +306,22 @@ struct State {
     int     seats = 2;
     SeatUi  ui[kMaxSeats];
     HWND    panel = nullptr;
+    HWND    self = nullptr;          // the settings window
+    HWND    tab = nullptr;           // the two tabs
+    HWND    page = nullptr;          // the "General" page, a sibling of the panel
+    HWND    tip = nullptr;           // the tooltips
     HWND    hint = nullptr, status = nullptr, about = nullptr, site = nullptr, undo = nullptr, close = nullptr;
-    HWND    autostart = nullptr;     // "start with Windows", in the general section
+    HWND    langLabel = nullptr, lang = nullptr, help = nullptr;
+    HWND    autostart = nullptr;     // "start with Windows", in the general page
     HWND    autoNote = nullptr;      // why it is refused, under the checkbox
     bool    autoSafe = false;        // this copy sits where the task may be created
     bool    autoRoom = false;        // the note has its place in the layout
-    RECT    general{};               // title of the general section, painted by the window
+    int     autoState = -1;          // the task as last read: 1, 0, or -1
+    int     curTab = tabGeneral;
+    bool    laidOut = false;         // the first layout is done
+    RECT    statusRow{};             // where the status sits, in the window; centred on its text
+    struct Tip { HWND tool, parent; Str id; };
+    std::vector<Tip> tips;
     bool    autoWait = false;        // a change is in flight, polled by kTimerAutostart
     bool    autoWant = false;
     int     autoTries = 0;
@@ -357,8 +391,9 @@ void EnsureSeats(Config& c, int n) {
 std::wstring Format(Field f, double v) {
     wchar_t buf[32];
     swprintf(buf, 32, kRange[f].fmt, v);
-    if (UiFrench())
-        for (wchar_t* p = buf; *p; ++p) if (*p == L'.') *p = L',';
+    const wchar_t dec = LangData(UiLang()).decimal;
+    if (dec != L'.')
+        for (wchar_t* p = buf; *p; ++p) if (*p == L'.') *p = dec;
     return buf;
 }
 
@@ -412,7 +447,26 @@ std::wstring SeatTitle(int i) {
 
 // ---------------------------------------------------------------- apply
 
-void SetStatus(const std::wstring& text) { SetWindowTextW(g.status, text.c_str()); }
+int TextHeightOf(const wchar_t* text, int w);   // below, with the layout
+
+// The status is at most two lines, centred on the row of the buttons.
+void PlaceStatus() {
+    const RECT& r = g.statusRow;
+    if (r.right <= r.left) return;
+    wchar_t text[512];
+    GetWindowTextW(g.status, text, (int)(sizeof(text) / sizeof(text[0])));
+    int h = TextHeightOf(text, r.right - r.left);
+    const int maxH = r.bottom - r.top;
+    if (h > maxH) h = maxH;
+    SetWindowPos(g.status, nullptr, r.left, r.top + (maxH - h) / 2, r.right - r.left, h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void SetStatus(const std::wstring& text) {
+    SetWindowTextW(g.status, text.c_str());
+    PlaceStatus();
+    if (g.self) InvalidateRect(g.self, &g.statusRow, TRUE);
+}
 
 // Merge the seat values into the file as it is now, then wake the engine.
 void Apply() {
@@ -435,6 +489,7 @@ void Apply() {
         else if (disk.disabledMice.count(kv.first) ||
                  disk.disabledMice.size() < Config::kMaxDisabled) disk.disabledMice.insert(kv.first);
     }
+    disk.language = g.cur.language;
     if (!disk.Save(g.path)) {
         wchar_t buf[MAX_PATH + 64];
         swprintf(buf, MAX_PATH + 64, S(sSaveFailed), g.path.c_str());
@@ -479,7 +534,10 @@ void ShowAutostart(bool on) {
 // The box is only usable to create the task from a protected copy. A task that
 // exists can always be removed, and says so when it runs a program from a
 // folder ordinary users can change.
+void FitWindow(HWND hwnd);
+
 void GateAutostart(int state) {
+    g.autoState = state;
     bool taskBad = false;
     if (state == 1) {
         const std::wstring task = AutostartTaskPath();
@@ -489,6 +547,11 @@ void GateAutostart(int state) {
     const wchar_t* note = taskBad ? S(sAutostartTaskUnsafe) : (!g.autoSafe && state != 1) ? S(sAutostartUnsafe) : L"";
     SetWindowTextW(g.autoNote, note);
     ShowWindow(g.autoNote, *note ? SW_SHOW : SW_HIDE);
+    // The note takes its room in the page, and gives it back when it goes.
+    if ((*note != 0) != g.autoRoom) {
+        g.autoRoom = *note != 0;
+        if (g.laidOut) FitWindow(g.self);
+    }
 }
 
 void FinishAutostart(HWND hwnd, bool ok, int state) {
@@ -516,8 +579,7 @@ void OnAutostart(HWND hwnd) {
     g.autoWant = SendMessageW(g.autostart, BM_GETCHECK, 0, 0) == BST_CHECKED;
     g.autoTries = 0;
     if (g.autoWant && !g.autoSafe) {   // the engine would refuse too; no prompt for nothing
-        ShowAutostart(false);
-        SetStatus(S(sAutostartUnsafe));
+        ShowAutostart(false);          // the note under the box says why
         return;
     }
 
@@ -945,28 +1007,79 @@ BOOL CALLBACK SetFontProc(HWND child, LPARAM font) {
     return TRUE;
 }
 
+// Tooltips: a short explanation beside the setting it concerns. The text is
+// read again when the language changes (RefreshTips).
+void AddTip(HWND parent, HWND tool, Str id) {
+    if (!g.tip || !tool) return;
+    TOOLINFOW ti{};
+    ti.cbSize   = sizeof(ti);
+    ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd     = parent;
+    ti.uId      = (UINT_PTR)tool;
+    ti.lpszText = const_cast<LPWSTR>(S(id));
+    SendMessageW(g.tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    g.tips.push_back({ tool, parent, id });
+}
+
+void RefreshTips() {
+    if (!g.tip) return;
+    for (const State::Tip& t : g.tips) {
+        TOOLINFOW ti{};
+        ti.cbSize   = sizeof(ti);
+        ti.hwnd     = t.parent;
+        ti.uId      = (UINT_PTR)t.tool;
+        ti.lpszText = const_cast<LPWSTR>(S(t.id));
+        SendMessageW(g.tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+    }
+}
+
+// Every text of one seat's section, in the language in use. The lists keep
+// their selection; ShowSeat fills in what depends on the values.
+void SetSeatTexts(int i) {
+    SeatUi& u = g.ui[i];
+    const Str names[fFieldCount] = { sSensitivity, sSlow, sFast, sSpeed };
+    for (int f = 0; f < fFieldCount; ++f) SetWindowTextW(u.label[f], S(names[f]));
+    SetWindowTextW(u.padLabel, S(sPadMode));
+    SetWindowTextW(u.colorLabel, S(sColorLabel));
+    SetWindowTextW(u.styleLabel, S(sStyleLabel));
+    SetWindowTextW(u.fixed, S(sFixed));
+    SetWindowTextW(u.accel, S(sAccel));
+    SetWindowTextW(u.screenLabel, S(sScreen));
+    SetWindowTextW(u.defaults, S(sDefaults));
+    SetWindowTextW(u.learn, S(sLearn));
+    SetWindowTextW(u.forget, S(sForget));
+    SetWindowTextW(u.win, S(sWin));
+    SetWindowTextW(u.off, S(sDisable));
+
+    auto refill = [](HWND combo, int count, auto text) {
+        const LRESULT sel = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        for (int k = 0; k < count; ++k) SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)text(k));
+        SendMessageW(combo, CB_SETCURSEL, sel, 0);
+    };
+    refill(u.pad, 3, [](int k) { return S((Str)(sPadAuto + k)); });
+    refill(u.style, kStyleCount, [](int k) { return S((Str)(sStyle0 + k)); });
+    refill(u.action, kActCount, [](int k) { return ActionName(k); });
+}
+
 // The controls of one seat's section.
 void CreateSeatControls(int i) {
-    const wchar_t* names[fFieldCount] = { S(sSensitivity), S(sSlow), S(sFast), S(sSpeed) };
     HWND p = g.panel;
     SeatUi& u = g.ui[i];
-    u.padLabel = Make(p, L"STATIC", S(sPadMode), SS_LEFT, CtlId(i, cPadLabel));
+    u.padLabel = Make(p, L"STATIC", L"", SS_LEFT, CtlId(i, cPadLabel));
     u.pad = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cPad));
-    for (Str k : { sPadAuto, sPadOn, sPadOff }) SendMessageW(u.pad, CB_ADDSTRING, 0, (LPARAM)S(k));
-    u.off = Make(p, L"BUTTON", S(sDisable), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cOff));
-    u.colorLabel = Make(p, L"STATIC", S(sColorLabel), SS_LEFT, CtlId(i, cColorLabel));
+    u.off = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cOff));
+    u.colorLabel = Make(p, L"STATIC", L"", SS_LEFT, CtlId(i, cColorLabel));
     u.color = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cColor));
-    u.styleLabel = Make(p, L"STATIC", S(sStyleLabel), SS_LEFT, CtlId(i, cStyleLabel));
+    u.styleLabel = Make(p, L"STATIC", L"", SS_LEFT, CtlId(i, cStyleLabel));
     u.style = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cStyle));
-    for (int k = 0; k < kStyleCount; ++k)
-        SendMessageW(u.style, CB_ADDSTRING, 0, (LPARAM)S((Str)(sStyle0 + k)));
     u.preview = Make(p, kPreviewClass, L"", 0, CtlId(i, cPreview));
     // Two modes, one choice: the radio buttons first, the sliders of the mode below.
-    u.fixed   = Make(p, L"BUTTON", S(sFixed), WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON, CtlId(i, cFixed));
-    u.accel   = Make(p, L"BUTTON", S(sAccel), WS_TABSTOP | BS_AUTORADIOBUTTON, CtlId(i, cAccel));
+    u.fixed   = Make(p, L"BUTTON", L"", WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON, CtlId(i, cFixed));
+    u.accel   = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_AUTORADIOBUTTON, CtlId(i, cAccel));
     u.explain = Make(p, L"STATIC", L"", SS_LEFT | SS_NOPREFIX | WS_GROUP, CtlId(i, cExplain));
     for (int f = 0; f < fFieldCount; ++f) {
-        u.label[f]  = Make(p, L"STATIC", names[f], SS_LEFT | SS_NOPREFIX, CtlId(i, cLabel + f));
+        u.label[f]  = Make(p, L"STATIC", L"", SS_LEFT | SS_NOPREFIX, CtlId(i, cLabel + f));
         u.value[f]  = Make(p, L"STATIC", L"", SS_RIGHT, CtlId(i, cValue + f));
         u.slider[f] = Make(p, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
                            CtlId(i, cSlider + f));
@@ -976,38 +1089,100 @@ void CreateSeatControls(int i) {
         SendMessageW(u.slider[f], TBM_SETLINESIZE, 0, 1);
         SendMessageW(u.slider[f], TBM_SETPAGESIZE, 0, (LPARAM)std::lround(r.scale / 2));
     }
-    u.screenLabel = Make(p, L"STATIC", S(sScreen), SS_LEFT, CtlId(i, cScreenLabel));
+    u.screenLabel = Make(p, L"STATIC", L"", SS_LEFT, CtlId(i, cScreenLabel));
     u.screen = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cScreen));
-    u.defaults = Make(p, L"BUTTON", S(sDefaults), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cDefaults));
+    u.defaults = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cDefaults));
 
-    u.learn  = Make(p, L"BUTTON", S(sLearn), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cLearn));
-    u.forget = Make(p, L"BUTTON", S(sForget), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cForget));
+    u.learn  = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cLearn));
+    u.forget = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cForget));
     u.note   = Make(p, L"STATIC", L"", SS_LEFT, CtlId(i, cNote));
     u.list   = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cList));
     u.action = Make(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, CtlId(i, cAction));
-    for (int a = 0; a < kActCount; ++a) SendMessageW(u.action, CB_ADDSTRING, 0, (LPARAM)ActionName(a));
-    u.keys   = Make(p, L"BUTTON", S(sKeysNone), WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cKeys));
-    u.win    = Make(p, L"BUTTON", S(sWin), WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cWin));
+    u.keys   = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_PUSHBUTTON, CtlId(i, cKeys));
+    u.win    = Make(p, L"BUTTON", L"", WS_TABSTOP | BS_AUTOCHECKBOX, CtlId(i, cWin));
     SetWindowSubclass(u.keys, KeysProc, kSubclassKeys, 0);
+    SetSeatTexts(i);
+    AddTip(p, u.fixed, sTipModes);
+    AddTip(p, u.accel, sTipModes);
+    AddTip(p, u.learn, sTipLearn);
     ShowSeat(i);
 }
 
-void CreateControls(HWND hwnd) {
-    HWND p = g.panel;
-    for (int i = 0; i < g.seats; ++i) CreateSeatControls(i);
-    g.autostart = Make(p, L"BUTTON", S(sAutostart), WS_TABSTOP | BS_AUTOCHECKBOX, kIdAutostart);
-    g.autoNote = Make(p, L"STATIC", L"", SS_LEFT, 0);
-    g.autoSafe = AutostartCheck(SelfPath()) == AutostartVerdict::Ok;
+// The names in the list of languages: "automatic", then each language by its
+// own name, which never changes with the language in use.
+void FillLanguages() {
+    SendMessageW(g.lang, CB_RESETCONTENT, 0, 0);
+    SendMessageW(g.lang, CB_ADDSTRING, 0, (LPARAM)S(sLangAuto));
+    for (int k = 0; k < kLangCount; ++k)
+        SendMessageW(g.lang, CB_ADDSTRING, 0, (LPARAM)LangData((Lang)k).name);
+    SendMessageW(g.lang, CB_SETCURSEL, g.cur.language + 1, 0);   // kLangAuto is -1
+}
+
+// The texts that do not belong to a mouse.
+void SetCommonTexts(HWND hwnd) {
+    SetWindowTextW(hwnd, S(sTitle));
+    const Str tabs[2] = { sGeneral, sTabMice };
+    for (int k = 0; k < 2; ++k) {
+        TCITEMW ti{};
+        ti.mask    = TCIF_TEXT;
+        ti.pszText = const_cast<LPWSTR>(S(tabs[k]));
+        SendMessageW(g.tab, TCM_SETITEMW, k, (LPARAM)&ti);
+    }
+    SetWindowTextW(g.autostart, S(sAutostart));
+    SetWindowTextW(g.langLabel, S(sLanguage));
+    FillLanguages();
+    SetWindowTextW(g.help, S(sHelp));
+    SetWindowTextW(g.about, S(sAbout));
+    SetWindowTextW(g.hint, S(sHint));
+    SetWindowTextW(g.undo, S(sUndo));
+    SetWindowTextW(g.close, S(sClose));
+}
+
+void CreateControls(HWND hwnd, HINSTANCE inst) {
+    // Created in the order the Tab key walks them: the tabs, the pages, the footer.
+    g.tab = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                            0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)kIdTab, inst, nullptr);
+    for (int k = 0; k < 2; ++k) {
+        TCITEMW ti{};
+        ti.mask    = TCIF_TEXT;
+        ti.pszText = const_cast<LPWSTR>(L"");
+        SendMessageW(g.tab, TCM_INSERTITEMW, k, (LPARAM)&ti);
+    }
+    g.tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+                            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                            hwnd, nullptr, inst, nullptr);
+    if (g.tip) SendMessageW(g.tip, TTM_SETMAXTIPWIDTH, 0, Px(300));
+
+    // The general page.
+    g.page = CreateWindowExW(WS_EX_CONTROLPARENT, kPageClass, L"", WS_CHILD | WS_CLIPCHILDREN,
+                             0, 0, 0, 0, hwnd, nullptr, inst, nullptr);
+    HWND gp = g.page;
+    g.autostart = Make(gp, L"BUTTON", L"", WS_TABSTOP | BS_AUTOCHECKBOX, kIdAutostart);
+    g.autoNote  = Make(gp, L"STATIC", L"", SS_LEFT, 0);
+    g.langLabel = Make(gp, L"STATIC", L"", SS_LEFT, 0);
+    g.lang      = Make(gp, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, kIdLang);
+    g.help      = Make(gp, L"BUTTON", L"", WS_TABSTOP | BS_PUSHBUTTON, kIdHelp);
+    g.about     = Make(gp, L"STATIC", L"", SS_LEFT, 0);
+    g.site      = Make(gp, L"STATIC", kSiteUrl, SS_LEFT | SS_NOTIFY, kIdSite);
+    g.autoSafe  = AutostartCheck(SelfPath()) == AutostartVerdict::Ok;
     const int autoState = ReadAutostart();
     ShowAutostart(autoState == 1);
-    GateAutostart(autoState);
-    g.autoRoom = GetWindowTextLengthW(g.autoNote) > 0;   // refused here, or a task to be removed
-    g.hint   = Make(hwnd, L"STATIC", S(sHint), SS_LEFT, 0);
+
+    // The mice page: a panel that scrolls.
+    g.panel = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"",
+                              WS_CHILD | WS_VSCROLL | WS_CLIPCHILDREN,
+                              0, 0, 0, 0, hwnd, nullptr, inst, nullptr);
+    for (int i = 0; i < g.seats; ++i) CreateSeatControls(i);
+
+    // The footer, common to both tabs.
+    g.hint   = Make(hwnd, L"STATIC", L"", SS_LEFT, 0);
     g.status = Make(hwnd, L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, 0);
-    g.about  = Make(hwnd, L"STATIC", S(sAbout), SS_LEFT, 0);
-    g.site   = Make(hwnd, L"STATIC", kSiteUrl, SS_LEFT | SS_NOTIFY, kIdSite);
-    g.undo   = Make(hwnd, L"BUTTON", S(sUndo), WS_TABSTOP | BS_PUSHBUTTON, kIdUndo);
-    g.close  = Make(hwnd, L"BUTTON", S(sClose), WS_TABSTOP | BS_DEFPUSHBUTTON, kIdClose);
+    g.undo   = Make(hwnd, L"BUTTON", L"", WS_TABSTOP | BS_PUSHBUTTON, kIdUndo);
+    g.close  = Make(hwnd, L"BUTTON", L"", WS_TABSTOP | BS_DEFPUSHBUTTON, kIdClose);
+
+    SetCommonTexts(hwnd);
+    GateAutostart(autoState);   // after the texts: its note is one of them
 }
 
 // ---------------------------------------------------------------- scrolling
@@ -1118,28 +1293,66 @@ int LayoutSeat(int i, int x, int y) {
     return y;
 }
 
-// Height a static text needs when wrapped to the given width, in the panel
-// font, so the footer takes the room its text uses and no more.
-int TextHeight(HWND h, int w) {
-    wchar_t text[512];
-    GetWindowTextW(h, text, (int)(sizeof(text) / sizeof(text[0])));
-    HDC dc = GetDC(h);
+// Height a static text needs when wrapped to the given width, in the window
+// font, so every block takes the room its text uses and no more.
+int TextHeightOf(const wchar_t* text, int w) {
+    HDC dc = GetDC(g.self);
     HGDIOBJ old = SelectObject(dc, g.font);
     RECT r{ 0, 0, w, 0 };
     DrawTextW(dc, text, -1, &r, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
     SelectObject(dc, old);
-    ReleaseDC(h, dc);
+    ReleaseDC(g.self, dc);
     return r.bottom;
 }
 
-// Lays out every control for the current DPI; returns the client size.
+int TextHeight(HWND h, int w) {
+    wchar_t text[512];
+    GetWindowTextW(h, text, (int)(sizeof(text) / sizeof(text[0])));
+    return TextHeightOf(text, w);
+}
+
+// Width a button needs for its text.
+int ButtonWidth(HWND h, int minDip) {
+    wchar_t text[128];
+    GetWindowTextW(h, text, (int)(sizeof(text) / sizeof(text[0])));
+    HDC dc = GetDC(g.self);
+    HGDIOBJ old = SelectObject(dc, g.font);
+    SIZE sz{};
+    GetTextExtentPoint32W(dc, text, (int)wcslen(text), &sz);
+    SelectObject(dc, old);
+    ReleaseDC(g.self, dc);
+    return sz.cx + Px(28) > Px(minDip) ? sz.cx + Px(28) : Px(minDip);
+}
+
+// The one place where a position along the line of text is decided: today every
+// language reads left to right, so it is the identity; a right-to-left language
+// mirrors the footer and the general page here, and the rest follows.
+int Lx(int x, int w, int total) { return UiRtl() ? total - x - w : x; }
+
+// The font of the interface of Windows in the language Windows is set to: it is
+// the one that has the letters of that language. Segoe UI when it cannot be read.
+void FaceOfWindows(wchar_t (&face)[LF_FACESIZE]) {
+    NONCLIENTMETRICSW ncm{};
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0) && ncm.lfMessageFont.lfFaceName[0])
+        wcscpy_s(face, ncm.lfMessageFont.lfFaceName);
+    else
+        wcscpy_s(face, L"Segoe UI");
+}
+
+constexpr int kMinWidth = 600;   // dip: room for the general page and the footer
+
+// Lays out every control for the current DPI and the tab shown; returns the
+// client size.
 SIZE Layout(HWND hwnd) {
     if (g.font) DeleteObject(g.font);
     if (g.bold) DeleteObject(g.bold);
+    wchar_t face[LF_FACESIZE];
+    FaceOfWindows(face);
     g.font = CreateFontW(-MulDiv(9, (int)g.dpi, 72), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                         0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+                         0, 0, CLEARTYPE_QUALITY, 0, face);
     g.bold = CreateFontW(-MulDiv(11, (int)g.dpi, 72), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
-                         0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+                         0, 0, CLEARTYPE_QUALITY, 0, face);
     EnumChildWindows(hwnd, SetFontProc, (LPARAM)g.font);
     {
         // The "Disable" box is as wide as its text: the title beside it gets the rest.
@@ -1155,40 +1368,63 @@ SIZE Layout(HWND hwnd) {
         SetWindowPos(h, nullptr, x, y, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
     };
 
-    // The panel is laid out unscrolled, then scrolled back to the top.
-    g.scrollY = 0;
     const int colW = Px(kColW);
+    const int m = Px(kMargin);
 
-    // General settings first, across the full width. Later ones go under the
-    // checkbox; the seats below follow whatever height this section takes.
-    const int genW = Columns() * colW + (Columns() - 1) * Px(kGap);
-    int gy = Px(kMargin);
-    g.general = { Px(kMargin), gy, Px(kMargin) + genW, gy + Px(24) };
-    gy += Px(34);
-    place(g.autostart, Px(kMargin), gy, genW, Px(22));
-    gy += Px(22);
-    if (g.autoRoom) {
-        place(g.autoNote, Px(kMargin) + Px(20), gy + Px(2), genW - Px(20), Px(36));
-        gy += Px(40);
-    }
-
-    int bottom = gy, rowTop = gy + Px(30), rowEnd = 0;
+    // The mice page is laid out unscrolled, then scrolled back to the top.
+    g.scrollY = 0;
+    int bottom = m, rowTop = m, rowEnd = 0;
     for (int i = 0; i < g.seats; ++i) {
         if (i > 0 && i % kPerRow == 0) { rowTop = rowEnd + Px(28); rowEnd = 0; }
-        const int x = Px(kMargin) + (i % kPerRow) * (colW + Px(kGap));
+        const int x = m + (i % kPerRow) * (colW + Px(kGap));
         const int end = LayoutSeat(i, x, rowTop);
         if (end > rowEnd) rowEnd = end;
         if (end > bottom) bottom = end;
     }
-    const int width    = Px(kMargin) * 2 + Columns() * colW + (Columns() - 1) * Px(kGap);
-    const int contentH = bottom + Px(kMargin);
-    const int inner    = width - Px(kMargin) * 2;
-    const int hintH    = TextHeight(g.hint, inner);
-    const int aboutH   = TextHeight(g.about, inner);
-    const int footerH  = Px(12) + hintH + Px(8) + Px(18) + Px(10) + Px(30) + Px(12)
-                       + aboutH + Px(18) + Px(kMargin);
+    const int seatsW   = m * 2 + Columns() * colW + (Columns() - 1) * Px(kGap);
+    const int width    = seatsW > Px(kMinWidth) ? seatsW : Px(kMinWidth);
+    const int contentH = bottom + m;
 
-    // The panel takes the height the screen allows; what does not fit scrolls.
+    // The tabs: a strip as high as its items.
+    place(g.tab, 0, 0, width, Px(40));
+    RECT item{};
+    SendMessageW(g.tab, TCM_GETITEMRECT, 0, (LPARAM)&item);
+    const int tabH = item.bottom + Px(3);
+
+    // The footer: one short grey sentence, then the status on the row of the buttons.
+    const int inner  = width - m * 2;
+    const int hintH  = TextHeight(g.hint, inner);
+    const int rowH   = Px(34);
+    const int footerH = Px(10) + hintH + Px(6) + rowH + m;
+
+    // The general page: the box, its note, the language, the help, the credits.
+    int gy = m;
+    place(g.autostart, Lx(m, inner, width), gy, inner, Px(22));
+    gy += Px(22);
+    if (g.autoRoom) {
+        const int noteW = inner - Px(20);
+        const int noteH = TextHeight(g.autoNote, noteW);
+        place(g.autoNote, Lx(m + Px(20), noteW, width), gy + Px(2), noteW, noteH);
+        gy += noteH + Px(8);
+    }
+    gy += Px(16);
+    place(g.langLabel, Lx(m, inner, width), gy, inner, Px(18));
+    gy += Px(20);
+    const int langW = Px(300);
+    place(g.lang, Lx(m, langW, width), gy, langW, Px(200));
+    gy += Px(38);
+    const int helpW = ButtonWidth(g.help, 100);
+    place(g.help, Lx(m, helpW, width), gy, helpW, Px(28));
+    gy += Px(28) + Px(24);
+    const int aboutH = TextHeight(g.about, inner);
+    place(g.about, Lx(m, inner, width), gy, inner, aboutH);
+    gy += aboutH;
+    place(g.site, Lx(m, inner, width), gy, inner, Px(18));
+    gy += Px(18) + m;
+    const int generalH = gy;
+
+    // The window takes the height of the tab it shows; what does not fit the
+    // screen scrolls (the mice page only).
     MONITORINFO mi{ sizeof(mi) };
     GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
     RECT wr{}, cr{};
@@ -1197,35 +1433,44 @@ SIZE Layout(HWND hwnd) {
     const int chrome    = (wr.bottom - wr.top) - (cr.bottom - cr.top);
     const int maxClient = (mi.rcWork.bottom - mi.rcWork.top) - chrome - Px(8);
     int panelH = contentH;
-    const bool scrolls = panelH + footerH > maxClient;
-    if (scrolls) panelH = maxClient - footerH;
+    const bool scrolls = tabH + panelH + footerH > maxClient;
+    if (scrolls) panelH = maxClient - tabH - footerH;
     if (panelH < Px(200)) panelH = Px(200);
+    // The scroll bar widens both tabs, so the window does not change width with them.
     const int sbW = scrolls ? ScrollBarWidth() : 0;
+    const int totalW = width + sbW;
 
-    place(g.panel, 0, 0, width + sbW, panelH);
+    place(g.tab, 0, 0, totalW, tabH);
+    place(g.page, 0, tabH, totalW, generalH);
+    place(g.panel, 0, tabH, totalW, panelH);
     SCROLLINFO si{ sizeof(si), SIF_RANGE | SIF_PAGE | SIF_POS };
     si.nMin  = 0;
     si.nMax  = contentH - 1;
     si.nPage = (UINT)(scrolls ? panelH : contentH + 1);
     si.nPos  = 0;
     SetScrollInfo(g.panel, SB_VERT, &si, TRUE);
+    ShowWindow(g.page, g.curTab == tabGeneral ? SW_SHOWNA : SW_HIDE);
+    ShowWindow(g.panel, g.curTab == tabMice ? SW_SHOWNA : SW_HIDE);
 
-    int y = panelH + Px(12);
-    place(g.hint, Px(kMargin), y, inner, hintH);
-    y += hintH + Px(8);
-    place(g.status, Px(kMargin), y, inner, Px(18));
-    y += Px(18) + Px(10);
-    const int closeW = Px(100), undoW = Px(190), h = Px(30);
-    place(g.close, width + sbW - Px(kMargin) - closeW, y, closeW, h);
-    place(g.undo,  width + sbW - Px(kMargin) - closeW - Px(10) - undoW, y, undoW, h);
-    y += h + Px(12);
-    place(g.about, Px(kMargin), y, inner, aboutH);
-    y += aboutH;
-    place(g.site, Px(kMargin), y, inner, Px(18));
-    y += Px(18) + Px(kMargin);
+    int y = tabH + (g.curTab == tabGeneral ? generalH : panelH);
+    place(g.hint, Lx(m, totalW - m * 2, totalW), y + Px(10), totalW - m * 2, hintH);
+    y += Px(10) + hintH + Px(6);
+    const int closeW = ButtonWidth(g.close, 90), undoW = ButtonWidth(g.undo, 90), h = Px(30);
+    const int gap = Px(10);
+    const int closeX = totalW - m - closeW;
+    const int undoX  = closeX - gap - undoW;
+    place(g.close, Lx(closeX, closeW, totalW), y + (rowH - h) / 2, closeW, h);
+    place(g.undo,  Lx(undoX, undoW, totalW),   y + (rowH - h) / 2, undoW, h);
+    // The status takes what is left of the row, on the side of the reading.
+    const int statusW = undoX - gap - m;
+    const int statusX = Lx(m, statusW, totalW);
+    g.statusRow = { statusX, y, statusX + statusW, y + rowH };
+    PlaceStatus();
+    y += rowH + m;
+    g.laidOut = true;
     InvalidateRect(g.panel, nullptr, TRUE);
     InvalidateRect(hwnd, nullptr, TRUE);
-    return { width + sbW, y };
+    return { totalW, y };
 }
 
 RECT WindowRectFor(SIZE client, DWORD style) {
@@ -1243,14 +1488,6 @@ void PaintPanel(HWND hwnd) {
     SetBkMode(dc, TRANSPARENT);
     SetViewportOrgEx(dc, 0, -g.scrollY, nullptr);
     HGDIOBJ old = SelectObject(dc, g.bold);
-    {
-        const RECT& h = g.general;
-        RECT tr = h;
-        SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
-        DrawTextW(dc, S(sGeneral), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        RECT line{ h.left, h.bottom + Px(4), h.right, h.bottom + Px(5) };
-        FillRect(dc, &line, GetSysColorBrush(COLOR_3DLIGHT));
-    }
     for (int i = 0; i < g.seats; ++i) {
         const RECT& h = g.ui[i].header;
         const int sw = Px(16), top = h.top + (h.bottom - h.top - sw) / 2;
@@ -1383,6 +1620,17 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// The general page only hosts its controls, like the panel does.
+LRESULT CALLBACK PageProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_COMMAND:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return SendMessageW(GetParent(hwnd), msg, wp, lp);
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 // ---------------------------------------------------------------- events
 
 bool SeatOf(int id, int& seat, int& ctl) {
@@ -1461,9 +1709,51 @@ void OnSlider(HWND hwnd, HWND slider) {
     ApplySoon(hwnd);
 }
 
+// The window shows one tab at a time and takes the height of that one.
+void SelectTab(HWND hwnd, int tab) {
+    if (tab < 0 || tab > 1) return;
+    g.curTab = tab;
+    if ((int)SendMessageW(g.tab, TCM_GETCURSEL, 0, 0) != tab) SendMessageW(g.tab, TCM_SETCURSEL, tab, 0);
+    FitWindow(hwnd);
+}
+
+// The help page of the language in use: a fixed address of the table, nothing
+// that comes from outside is ever put into it.
+void OnHelp(HWND hwnd) {
+    const wchar_t* url = LangData(UiLang()).helpUrl;
+    if ((INT_PTR)ShellExecuteW(hwnd, L"open", url, nullptr, nullptr, SW_SHOWNORMAL) <= 32)
+        SetStatus(S(sHelpFail));
+}
+
+// A new language: every text of the window, then the size that fits them.
+void RefreshTexts(HWND hwnd) {
+    SetCommonTexts(hwnd);
+    for (int i = 0; i < g.seats; ++i) {
+        g.note[i].clear();
+        SetSeatTexts(i);
+        ShowSeat(i);
+    }
+    GateAutostart(g.autoState);
+    RefreshTips();
+    SetWindowTextW(g.status, L"");
+    FitWindow(hwnd);
+}
+
+void OnLanguage(HWND hwnd) {
+    const int sel = (int)SendMessageW(g.lang, CB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel > kLangCount) return;
+    const int choice = sel - 1;           // 0 is "automatic" = kLangAuto
+    if (choice == g.cur.language) return;
+    g.cur.language = choice;
+    SetLanguageChoice(choice);
+    RefreshTexts(hwnd);
+    Apply();                              // saved, and the engine switches its own texts
+}
+
 void OnCommand(HWND hwnd, int id) {
     if (id == kIdClose || id == IDCANCEL) { SendMessageW(hwnd, WM_CLOSE, 0, 0); return; }
     if (id == kIdAutostart) { OnAutostart(hwnd); return; }
+    if (id == kIdHelp) { OnHelp(hwnd); return; }
     if (id == kIdUndo) {
         for (int i = 0; i < g.seats; ++i) {
             g.cur.sensitivity[i] = g.opened.sensitivity[i];
@@ -1522,6 +1812,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (HIWORD(wp) == BN_CLICKED) OnCommand(hwnd, LOWORD(wp));
         else if (HIWORD(wp) == STN_CLICKED && LOWORD(wp) == kIdSite)
             ShellExecuteW(hwnd, L"open", kSiteUrl, nullptr, nullptr, SW_SHOWNORMAL);
+        else if (HIWORD(wp) == CBN_SELCHANGE && LOWORD(wp) == kIdLang)
+            OnLanguage(hwnd);
         else if (HIWORD(wp) == CBN_SELCHANGE) {
             int seat, ctl;
             if (SeatOf(LOWORD(wp), seat, ctl)) {
@@ -1534,6 +1826,12 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         return 0;
+    case WM_NOTIFY: {
+        const NMHDR* nh = (const NMHDR*)lp;
+        if (nh && nh->hwndFrom == g.tab && nh->code == TCN_SELCHANGE)
+            SelectTab(hwnd, (int)SendMessageW(g.tab, TCM_GETCURSEL, 0, 0));
+        return 0;
+    }
     case kLearnedMsg:
         OnLearned(hwnd, (int)wp, lp);
         return 0;
@@ -1604,11 +1902,12 @@ int RunSettings(HINSTANCE inst) {
         return 0;
     }
 
-    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES };
+    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
 
     g.path = Config::DefaultPath();
     g.opened.Load(g.path);
+    SetLanguageChoice(g.opened.language);
     g.seats = g.opened.seatCount;
     EnsureSeats(g.opened, g.seats);
     g.cur = g.opened;
@@ -1642,6 +1941,15 @@ int RunSettings(HINSTANCE inst) {
     pc.lpszClassName = kPanelClass;
     RegisterClassExW(&pc);
 
+    WNDCLASSEXW gc{};
+    gc.cbSize        = sizeof(gc);
+    gc.lpfnWndProc   = PageProc;
+    gc.hInstance     = inst;
+    gc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    gc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+    gc.lpszClassName = kPageClass;
+    RegisterClassExW(&gc);
+
     WNDCLASSEXW vc{};
     vc.cbSize        = sizeof(vc);
     vc.lpfnWndProc   = PreviewProc;
@@ -1656,13 +1964,10 @@ int RunSettings(HINSTANCE inst) {
                                 CW_USEDEFAULT, CW_USEDEFAULT, 100, 100,
                                 nullptr, nullptr, inst, nullptr);
     if (!hwnd) return 1;
+    g.self = hwnd;
     // The engine runs elevated and this window may not: let its answer through.
     ChangeWindowMessageFilterEx(hwnd, kLearnedMsg, MSGFLT_ALLOW, nullptr);
     ChangeWindowMessageFilterEx(hwnd, kSeatsMsg, MSGFLT_ALLOW, nullptr);
-
-    g.panel = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN,
-                              0, 0, 100, 100, hwnd, nullptr, inst, nullptr);
-    if (!g.panel) return 1;
 
     // Open on the screen where the pointer that asked for it is.
     POINT pt{};
@@ -1673,7 +1978,8 @@ int RunSettings(HINSTANCE inst) {
                  SWP_NOZORDER | SWP_NOACTIVATE);
     g.dpi = DpiOf(hwnd);
 
-    CreateControls(hwnd);
+    CreateControls(hwnd, inst);
+    if (!g.panel || !g.page || !g.tab) return 1;
     const SIZE client = Layout(hwnd);
     const RECT wr = WindowRectFor(client, style);
     const int w = wr.right - wr.left, h = wr.bottom - wr.top;
@@ -1689,6 +1995,12 @@ int RunSettings(HINSTANCE inst) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        // Ctrl+Tab and Ctrl+Shift+Tab change tab from anywhere in the window.
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_TAB && (GetKeyState(VK_CONTROL) & 0x8000) &&
+            (msg.hwnd == hwnd || IsChild(hwnd, msg.hwnd))) {
+            SelectTab(hwnd, g.curTab == tabGeneral ? tabMice : tabGeneral);
+            continue;
+        }
         if (IsDialogMessageW(hwnd, &msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);

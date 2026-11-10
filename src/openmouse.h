@@ -21,6 +21,7 @@ namespace om {
 // ---------------------------------------------------------------- constants
 
 constexpr int   kMaxSeats        = 8;
+constexpr int   kLangAuto        = -1;   // language choice: follow Windows (else a Lang, see below)
 constexpr UINT  kTrayCallbackMsg = WM_APP + 1;
 constexpr UINT  kTrayIconId      = 1;
 // Id of the icon resource in res/openmouse.rc.
@@ -213,6 +214,9 @@ struct Config {
     // stalls, so does typing. Off by default; see README "Safety".
     bool captureKeyboards = false;
 
+    // Language of the windows and messages: kLangAuto or a Lang (ini key "language").
+    int  language = kLangAuto;
+
     // Pointer speed multiplier per seat index.
     std::vector<double> sensitivity = {1.0, 1.0, 1.0, 1.0};
 
@@ -330,9 +334,40 @@ private:
 
 // The settings window, a process of its own (openmouse.exe --settings).
 int  RunSettings(HINSTANCE inst);
-// True when Windows shows its interface in French; the tray menu and the
-// settings window then speak French, otherwise English.
-bool UiFrench();
+
+// ---------------------------------------------------------------- language
+
+// The languages the program speaks. To add one: a value here (before Count), a
+// line in kLangs (lang.cpp), a table in kMsgs (lang.cpp) and one in kStr
+// (settings.cpp), and a user guide for the Help button. No layout code changes;
+// a missing table entry falls back to English.
+enum class Lang { En = 0, Fr, Count };
+constexpr int kLangCount = (int)Lang::Count;
+
+struct LangInfo {
+    const wchar_t* code;       // value of "language=" in the ini
+    const wchar_t* name;       // the language's own name, as the choice list shows it
+    WORD           primary;    // primary Windows language id, for "automatic"
+    bool           rtl;        // written right to left (nothing is mirrored yet)
+    wchar_t        decimal;    // decimal separator of the numbers the windows show
+    const wchar_t* helpUrl;    // fixed address of the user guide in this language
+};
+const LangInfo& LangData(Lang l);
+
+// The choice kept in the ini: kLangAuto is "automatic" (the language of Windows), else a Lang.
+int            LanguageFromCode(const std::wstring& code);   // kLangAuto when unknown
+const wchar_t* LanguageCode(int choice);                      // "auto" or the code
+void           SetLanguageChoice(int choice);                 // applies to UiLang() at once
+int            LanguageChoice();
+// The language in use: the choice, else the one of Windows, else English.
+Lang UiLang();
+bool UiRtl();
+
+// Messages of the engine (tray menu and balloon, names of learned buttons).
+enum class Msg { TrayTip, WarnTitle, WarnText, TrayHeader, TrayKeys, MenuSettings, MenuLog, MenuStop,
+                 BtnLeft, BtnRight, BtnMiddle, BtnBack, BtnForward, BtnSpecial, MouseKey,
+                 MediaKey, MakerButton, SystemControl, Count };
+const wchar_t* T(Msg m);
 
 // ---------------------------------------------------------------- autostart
 

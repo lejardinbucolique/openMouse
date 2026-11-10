@@ -255,6 +255,7 @@ bool Config::Load(const std::wstring& path) {
             if      (key == L"seats")             seatCount        = _wtoi(val.c_str());
             else if (key == L"capture_keyboards") captureKeyboards = (val == L"1" || val == L"true");
             else if (key == L"mark_active_seat")  markActiveSeat   = (val == L"1" || val == L"true");
+            else if (key == L"language")          language         = LanguageFromCode(val);
             else if (key == L"touchpad")
                 touchpad = (val == L"on")  ? Touchpad::On
                          : (val == L"off") ? Touchpad::Off : Touchpad::Auto;
@@ -332,7 +333,8 @@ bool Config::Save(const std::wstring& path) const {
     t += L"touchpad=" + std::wstring(touchpad == Touchpad::On ? L"on"
                                    : touchpad == Touchpad::Off ? L"off" : L"auto") + L"\n";
     t += L"capture_keyboards=" + std::wstring(captureKeyboards ? L"1" : L"0") + L"\n";
-    t += L"mark_active_seat="  + std::wstring(markActiveSeat  ? L"1" : L"0") + L"\n\n";
+    t += L"mark_active_seat="  + std::wstring(markActiveSeat  ? L"1" : L"0") + L"\n";
+    t += L"language=" + std::wstring(LanguageCode(language)) + L"\n\n";
 
     for (int i = 0; i < seatCount; ++i) {
         wchar_t buf[128];

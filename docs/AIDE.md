@@ -24,7 +24,7 @@ sa souris : l'une clique ici, l'autre fait défiler une page là-bas.
 3. Une icône apparaît près de l'horloge. Deux flèches de couleurs différentes sont
    à l'écran.
 
-Pour que le programme démarre avec Windows : clic sur l'icône, **Réglages…**, section
+Pour que le programme démarre avec Windows : clic sur l'icône, **Réglages…**, onglet
 **Général**, case **Lancer openMouse au démarrage de Windows**. Cette case n'est
 disponible qu'une fois openMouse installé dans un dossier protégé comme `Program Files`,
 car le programme démarre alors avec tous les droits ; depuis un autre dossier
@@ -57,9 +57,26 @@ souris concernée, et ouvrez **Réglages…** pour voir les souris reconnues.
 
 ## 4. Les réglages
 
-Clic sur l'icône près de l'horloge, puis **Réglages…**. Une zone par souris. Chaque
-changement s'applique tout de suite et s'enregistre ; **Annuler mes changements** remet
-les valeurs d'ouverture de la fenêtre.
+Clic sur l'icône près de l'horloge, puis **Réglages…**. La fenêtre a deux onglets
+(**Ctrl + Tab** passe de l'un à l'autre). Chaque changement s'applique tout de suite et
+s'enregistre ; **Annuler mes changements** remet les valeurs des souris à leur état
+d'ouverture de la fenêtre. Ces deux boutons et la ligne d'état (« Appliqué et enregistré »)
+sont en bas, communs aux deux onglets.
+
+### Onglet Général
+
+- **Lancer openMouse au démarrage de Windows** : voir « Démarrer » plus haut.
+- **Langue** : « Automatique (langue de Windows) », « Français » ou « English ». Le choix
+  s'applique tout de suite à la fenêtre, au menu de l'icône et aux messages d'openMouse, et
+  il est retenu.
+- **Aide** : ouvre cette page d'aide, dans la langue choisie, sur GitHub.
+- **À propos** : les crédits, avec le lien vers le site de Calepitool.
+
+### Onglet Souris
+
+Une zone par souris, et une pour le pavé tactile d'un portable. Passer la souris sur
+**Sensibilité fixe**, **Accélération progressive** ou **Apprendre un bouton** affiche une
+courte info-bulle.
 
 ### Reconnaître et mettre de côté une souris
 
@@ -83,7 +100,7 @@ actif) : openMouse le refuse, pour que vous ne restiez jamais sans pointeur.
 
 ### Vitesse de la flèche
 
-Chaque souris suit l'un de ces deux modes :
+Chaque souris suit l'un de ces deux modes (les curseurs de l'autre mode sont grisés) :
 
 - **Sensibilité fixe** : tous les mouvements sont multipliés par la même valeur. C'est le
   plus simple : montez la valeur si la flèche est trop lente.
@@ -103,7 +120,7 @@ personne travaille sur son moniteur) ou la laisser parcourir tout le bureau.
 Une souris a parfois des boutons que Windows ne connaît pas. Cliquez sur **Apprendre un
 bouton**, puis appuyez sur le bouton dans les huit secondes. Choisissez alors ce qu'il
 fait : un clic (gauche, droit, milieu, précédent, suivant), un raccourci clavier, ou rien.
-Le clic se fait à la position de la flèche de cette souris. **Oublier** retire le bouton
+Le clic se fait à la position de la flèche de cette souris, jamais de celle d'une autre. **Oublier** retire le bouton
 choisi.
 
 Certains boutons ne se laissent pas apprendre : ceux que seul le logiciel du fabricant

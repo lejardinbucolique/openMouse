@@ -21,7 +21,7 @@ while the other scrolls a page over there.
    but windows started "as administrator" (Task Manager, for example) escape the mice.
 3. An icon appears next to the clock and two pointers of different colours are on screen.
 
-To start it with Windows: click the icon, **Settings…**, **General** section, tick
+To start it with Windows: click the icon, **Settings…**, **General** tab, tick
 **Start openMouse with Windows**. This is only available once openMouse is installed in a
 protected folder such as `Program Files`, because the program then starts with full
 rights; from another folder (Downloads, Desktop…) the box is greyed out and says so.
@@ -50,9 +50,23 @@ the recognised mice.
 
 ## 4. Settings
 
-Click the icon next to the clock, then **Settings…**. One area per mouse. Every change
-applies and is saved at once; **Undo my changes** restores the values the window opened
-with.
+Click the icon next to the clock, then **Settings…**. The window has two tabs (**Ctrl + Tab**
+switches between them). Every change applies and is saved at once; **Undo my changes**
+restores the mouse values the window opened with. These two buttons and the status line
+("Applied and saved") sit at the bottom, shared by both tabs.
+
+### General tab
+
+- **Start openMouse with Windows**: see "Start" above.
+- **Language**: "Automatic (Windows language)", "Français" or "English". The choice applies
+  at once to the window, the icon menu and openMouse's messages, and is remembered.
+- **Help**: opens this guide, in the chosen language, on GitHub.
+- **About**: the credits, with the link to the Calepitool site.
+
+### Mice tab
+
+One area per mouse, and one for a laptop touchpad. Hovering **Fixed sensitivity**,
+**Progressive acceleration** or **Learn a button** shows a short tooltip.
 
 ### Recognising and setting aside a mouse
 
@@ -74,7 +88,7 @@ pointer.
 
 ### Pointer speed
 
-Each mouse follows one of two modes:
+Each mouse follows one of two modes (the sliders of the other mode are greyed out):
 
 - **Fixed sensitivity**: every movement is multiplied by the same value. The simplest:
   raise the value if the pointer is too slow.
