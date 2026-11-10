@@ -1,6 +1,6 @@
 # openMouse: Anleitung
 
-*[English version](HELP.md) · [Version française](AIDE.md)*
+*[English version](HELP.md) · [Version française](AIDE.md) · [Versión en español](AYUDA.md)*
 
 > Diese Übersetzung wurde mit Hilfe einer KI erstellt und von keiner Person, die Deutsch
 > spricht, gegengelesen. Korrekturen sind willkommen: Bitte melden Sie sie als Ticket im
@@ -72,7 +72,7 @@ Registerkarten.
 ### Registerkarte „Allgemein“
 
 - **openMouse mit Windows starten**: siehe „Starten“ oben.
-- **Sprache**: „Automatisch (Windows-Sprache)“, „Français“, „English“ oder „Deutsch“. Die
+- **Sprache**: „Automatisch (Windows-Sprache)“, „Français“, „English“, „Deutsch“ oder „Español“. Die
   Auswahl gilt sofort für das Fenster, das Menü des Symbols und die Meldungen von
   openMouse und bleibt gespeichert.
 - **Hilfe**: öffnet diese Anleitung in der gewählten Sprache auf GitHub.

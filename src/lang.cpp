@@ -19,12 +19,14 @@ namespace {
 constexpr wchar_t kHelpEn[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/HELP.md";
 constexpr wchar_t kHelpFr[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AIDE.md";
 constexpr wchar_t kHelpDe[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/HILFE.md";
+constexpr wchar_t kHelpEs[] = L"https://github.com/lejardinbucolique/openMouse/blob/main/docs/AYUDA.md";
 
 // In the order of the Lang enum.
 const LangInfo kLangs[kLangCount] = {
     { L"en", L"English",  LANG_ENGLISH, false, L'.', kHelpEn },
     { L"fr", L"Français", LANG_FRENCH,  false, L',', kHelpFr },
     { L"de", L"Deutsch",  LANG_GERMAN,  false, L',', kHelpDe },
+    { L"es", L"Español",  LANG_SPANISH, false, L',', kHelpEs },
 };
 
 std::atomic<int> g_choice{ kLangAuto };
@@ -92,8 +94,29 @@ const wchar_t* const kMsgDe[(int)Msg::Count] = {
     L"Systembefehl",
 };
 
+const wchar_t* const kMsgEs[(int)Msg::Count] = {
+    L"openMouse: haga clic para abrir la configuración o salir (emergencia: Ctrl+Alt+Mayús+Q)",
+    L"openMouse sin permisos de administrador",
+    L"El Administrador de tareas y las ventanas iniciadas como administrador escaparán al control de los ratones. Vuelva a iniciar openMouse y acepte la solicitud de permiso.",
+    L"openMouse: %d ratones%s",
+    L", teclados dirigidos",
+    L"Configuración…",
+    L"Abrir la carpeta del registro",
+    L"Salir de openMouse	Ctrl+Alt+Mayús+Q",
+    L"Botón izquierdo",
+    L"Botón derecho",
+    L"Botón central",
+    L"Botón Atrás (4)",
+    L"Botón Adelante (5)",
+    L"Botón especial (0x%X)",
+    L"Tecla «%s» del ratón",
+    L"Tecla multimedia",
+    L"Botón del fabricante",
+    L"Control del sistema",
+};
+
 // In the order of the Lang enum.
-const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe };
+const wchar_t* const* const kMsgs[kLangCount] = { kMsgEn, kMsgFr, kMsgDe, kMsgEs };
 
 } // namespace
 
