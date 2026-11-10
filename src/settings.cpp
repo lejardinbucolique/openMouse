@@ -1030,6 +1030,20 @@ int LayoutSeat(int i, int x, int y) {
     return y;
 }
 
+// Height a static text needs when wrapped to the given width, in the panel
+// font, so the footer takes the room its text uses and no more.
+int TextHeight(HWND h, int w) {
+    wchar_t text[512];
+    GetWindowTextW(h, text, (int)(sizeof(text) / sizeof(text[0])));
+    HDC dc = GetDC(h);
+    HGDIOBJ old = SelectObject(dc, g.font);
+    RECT r{ 0, 0, w, 0 };
+    DrawTextW(dc, text, -1, &r, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(dc, old);
+    ReleaseDC(h, dc);
+    return r.bottom;
+}
+
 // Lays out every control for the current DPI; returns the client size.
 SIZE Layout(HWND hwnd) {
     if (g.font) DeleteObject(g.font);
@@ -1070,7 +1084,11 @@ SIZE Layout(HWND hwnd) {
     }
     const int width    = Px(kMargin) * 2 + Columns() * colW + (Columns() - 1) * Px(kGap);
     const int contentH = bottom + Px(kMargin);
-    const int footerH  = Px(12) + Px(86) + Px(28) + Px(30) + Px(12) + Px(18) + Px(18) + Px(kMargin);
+    const int inner    = width - Px(kMargin) * 2;
+    const int hintH    = TextHeight(g.hint, inner);
+    const int aboutH   = TextHeight(g.about, inner);
+    const int footerH  = Px(12) + hintH + Px(8) + Px(18) + Px(10) + Px(30) + Px(12)
+                       + aboutH + Px(18) + Px(kMargin);
 
     // The panel takes the height the screen allows; what does not fit scrolls.
     MONITORINFO mi{ sizeof(mi) };
@@ -1094,18 +1112,17 @@ SIZE Layout(HWND hwnd) {
     si.nPos  = 0;
     SetScrollInfo(g.panel, SB_VERT, &si, TRUE);
 
-    const int inner = width - Px(kMargin) * 2;
     int y = panelH + Px(12);
-    place(g.hint, Px(kMargin), y, inner, Px(80));
-    y += Px(86);
+    place(g.hint, Px(kMargin), y, inner, hintH);
+    y += hintH + Px(8);
     place(g.status, Px(kMargin), y, inner, Px(18));
-    y += Px(28);
+    y += Px(18) + Px(10);
     const int closeW = Px(100), undoW = Px(190), h = Px(30);
     place(g.close, width + sbW - Px(kMargin) - closeW, y, closeW, h);
     place(g.undo,  width + sbW - Px(kMargin) - closeW - Px(10) - undoW, y, undoW, h);
     y += h + Px(12);
-    place(g.about, Px(kMargin), y, inner, Px(18));
-    y += Px(18);
+    place(g.about, Px(kMargin), y, inner, aboutH);
+    y += aboutH;
     place(g.site, Px(kMargin), y, inner, Px(18));
     y += Px(18) + Px(kMargin);
     InvalidateRect(g.panel, nullptr, TRUE);
