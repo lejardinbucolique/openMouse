@@ -21,3 +21,6 @@ cmake_install.cmake
 .claude/
 Thumbs.db
 desktop.ini
+
+# Installer output (never committed)
+/dist/

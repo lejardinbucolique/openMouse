@@ -570,6 +570,11 @@ build.cmd
 The script locates the toolchain with `vswhere` and produces `openmouse.exe` in the
 repository root.
 
+Installer (needs Inno Setup 6): `build-installer.cmd [version]` builds the program, then
+`installer/openmouse.iss`, and writes `dist\openMouse-setup-<version>.exe`. It installs into
+Program Files only (a folder ordinary users cannot change, which the start-with-Windows task
+requires); `dist/` is not tracked.
+
 With CMake:
 
 ```
